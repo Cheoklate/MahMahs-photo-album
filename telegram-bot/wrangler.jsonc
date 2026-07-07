@@ -7,5 +7,11 @@
     "GITHUB_REPO": "MahMahs-photo-album",
     "GITHUB_BRANCH": "main",
     "SITE_URL": "https://cheoklate.github.io/MahMahs-photo-album/"
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "PENDING_UPLOADS",
+      "id": "ba816cfd40ad4cf1aec2b70c79582594"
+    }
+  ]
 }

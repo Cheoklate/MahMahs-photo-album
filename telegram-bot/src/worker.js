@@ -1,15 +1,16 @@
 // Telegram webhook -> GitHub Contents API bridge.
 //
-// Flow: a friend sends a photo -> the bot replies to that photo with inline
-// buttons, one per existing album -> tapping a button uploads the photo into
-// that album. Both commits go straight to `main`, which GitHub Pages
-// auto-rebuilds.
-//
-// The album choice is threaded statelessly: the button-picker message is
-// sent as a reply to the original photo message, so when the callback comes
-// back, `callback_query.message.reply_to_message` is that original photo
-// message again (Telegram preserves one level of reply nesting) — no need
-// for a database or KV store to remember which photo the buttons belong to.
+// Flow: a friend sends a photo -> the bot replies with inline buttons, one
+// per existing album plus "New Album" -> tapping an existing album uploads
+// straight away; tapping "New Album" asks for a name (force-reply) and then
+// creates it. Each pending photo is held in Workers KV (PENDING_UPLOADS) for
+// a few minutes under a short random id, since a Telegram bot can't re-fetch
+// an old message on demand — the id round-trips through the button's
+// callback_data (and, for the new-album case, through a second KV entry
+// keyed by the force-reply prompt's message id) so we know which photo a
+// later tap or reply belongs to.
+
+const UPLOAD_TTL_SECONDS = 600;
 
 export default {
   async fetch(request, env) {
@@ -58,6 +59,16 @@ async function handleMessage(message, env) {
     return;
   }
 
+  // Is this a reply providing a name for a new album?
+  if (message.reply_to_message) {
+    const pendingKey = `pendingAlbumName:${message.reply_to_message.message_id}`;
+    const uploadId = await env.PENDING_UPLOADS.get(pendingKey);
+    if (uploadId) {
+      await handleNewAlbumName(uploadId, pendingKey, message, env);
+      return;
+    }
+  }
+
   if (message.text === "/start") {
     await sendMessage(env, chatId, `Hi ${senderName}! Send me a photo and I'll ask which album to add it to.\n${env.SITE_URL}`);
     return;
@@ -77,39 +88,71 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (albums.length === 0) {
-    await sendMessage(env, chatId, "There aren't any albums set up yet — ask the site owner to add one.");
-    return;
-  }
+  const uploadId = crypto.randomUUID().slice(0, 8);
+  const largest = message.photo[message.photo.length - 1];
+  await env.PENDING_UPLOADS.put(
+    `upload:${uploadId}`,
+    JSON.stringify({ fileId: largest.file_id, caption: message.caption || null, senderName }),
+    { expirationTtl: UPLOAD_TTL_SECONDS }
+  );
+
+  const buttons = albums.map((album) => [{ text: album.title, callback_data: `album:${uploadId}:${album.id}` }]);
+  buttons.push([{ text: "➕ New Album", callback_data: `newalbum:${uploadId}` }]);
 
   await sendMessage(env, chatId, "Which album should this go in?", {
     reply_to_message_id: message.message_id,
-    reply_markup: {
-      inline_keyboard: albums.map((album) => [{ text: album.title, callback_data: `album:${album.id}` }]),
-    },
+    reply_markup: { inline_keyboard: buttons },
   });
 }
 
 async function handleCallbackQuery(callbackQuery, env) {
   const userId = callbackQuery.from && callbackQuery.from.id;
-  const senderName = (callbackQuery.from && callbackQuery.from.first_name) || "a friend";
   const promptMessage = callbackQuery.message;
   const chatId = promptMessage.chat.id;
+  const data = callbackQuery.data || "";
 
   if (!isAllowed(env, userId)) {
     await answerCallbackQuery(env, callbackQuery.id, "Not authorized");
     return;
   }
 
-  const match = (callbackQuery.data || "").match(/^album:(.+)$/);
-  const photoMessage = promptMessage.reply_to_message;
+  const newAlbumMatch = data.match(/^newalbum:(.+)$/);
+  if (newAlbumMatch) {
+    const uploadId = newAlbumMatch[1];
+    const upload = await getUpload(env, uploadId);
+    if (!upload) {
+      await answerCallbackQuery(env, callbackQuery.id, "This request expired — please resend the photo.");
+      await editMessageText(env, chatId, promptMessage.message_id, "This request expired — please resend the photo.");
+      return;
+    }
 
-  if (!match || !photoMessage || !photoMessage.photo || photoMessage.photo.length === 0) {
-    await answerCallbackQuery(env, callbackQuery.id, "That photo is no longer available — please resend it.");
+    const sent = await sendMessage(env, chatId, "What would you like to name the new album? Reply to this message with a name.", {
+      reply_markup: { force_reply: true, selective: true },
+    });
+    if (sent && sent.result) {
+      await env.PENDING_UPLOADS.put(`pendingAlbumName:${sent.result.message_id}`, uploadId, {
+        expirationTtl: UPLOAD_TTL_SECONDS,
+      });
+    }
+
+    await answerCallbackQuery(env, callbackQuery.id, "");
+    await editMessageText(env, chatId, promptMessage.message_id, "Creating a new album — check the next message!");
     return;
   }
 
-  const albumId = match[1];
+  const albumMatch = data.match(/^album:([^:]+):(.+)$/);
+  if (!albumMatch) {
+    await answerCallbackQuery(env, callbackQuery.id, "");
+    return;
+  }
+
+  const [, uploadId, albumId] = albumMatch;
+  const upload = await getUpload(env, uploadId);
+  if (!upload) {
+    await answerCallbackQuery(env, callbackQuery.id, "This request expired — please resend the photo.");
+    await editMessageText(env, chatId, promptMessage.message_id, "This request expired — please resend the photo.");
+    return;
+  }
 
   try {
     const { albums } = await getAlbumsJson(env);
@@ -119,15 +162,12 @@ async function handleCallbackQuery(callbackQuery, env) {
       return;
     }
 
-    // Telegram sends multiple resolutions of the same photo; the last is the largest.
-    const largest = photoMessage.photo[photoMessage.photo.length - 1];
-    const fileBytes = await downloadTelegramFile(env, largest.file_id);
+    const fileBytes = await downloadTelegramFile(env, upload.fileId);
+    const photoPath = `photos/${albumId}/${photoFilename()}`;
 
-    const filename = `bot-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.jpg`;
-    const photoPath = `photos/${albumId}/${filename}`;
-
-    await githubUploadPhoto(env, photoPath, fileBytes, senderName);
-    await addPhotoToAlbum(env, albumId, photoPath, photoMessage.caption || `Shared by ${senderName}`);
+    await githubUploadPhoto(env, photoPath, fileBytes, upload.senderName);
+    await addPhotoToAlbum(env, albumId, null, photoPath, upload.caption || `Shared by ${upload.senderName}`);
+    await env.PENDING_UPLOADS.delete(`upload:${uploadId}`);
 
     await answerCallbackQuery(env, callbackQuery.id, "Added!");
     await editMessageText(
@@ -143,6 +183,66 @@ async function handleCallbackQuery(callbackQuery, env) {
   }
 }
 
+async function handleNewAlbumName(uploadId, pendingKey, message, env) {
+  const chatId = message.chat.id;
+  const upload = await getUpload(env, uploadId);
+  if (!upload) {
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, "This request expired — please resend the photo.", { reply_to_message_id: message.message_id });
+    return;
+  }
+
+  const title = (message.text || "").trim();
+  if (!title) {
+    // Leave the pending state in place so they can just reply again with a real name.
+    await sendMessage(env, chatId, "Please reply with a name for the album (some text, not empty).", {
+      reply_to_message_id: message.message_id,
+    });
+    return;
+  }
+
+  const albumId = slugify(title);
+
+  try {
+    const fileBytes = await downloadTelegramFile(env, upload.fileId);
+    const photoPath = `photos/${albumId}/${photoFilename()}`;
+
+    await githubUploadPhoto(env, photoPath, fileBytes, upload.senderName);
+    const finalTitle = await addPhotoToAlbum(env, albumId, title, photoPath, upload.caption || `Shared by ${upload.senderName}`);
+
+    await env.PENDING_UPLOADS.delete(`upload:${uploadId}`);
+    await env.PENDING_UPLOADS.delete(pendingKey);
+
+    await sendMessage(env, chatId, `Thanks! Created "${finalTitle}" and added your photo 🎉\n${env.SITE_URL}#/album/${albumId}`, {
+      reply_to_message_id: message.message_id,
+    });
+  } catch (err) {
+    console.error("New album creation failed", err);
+    await sendMessage(env, chatId, "Sorry, something went wrong creating that album. Please try again.", {
+      reply_to_message_id: message.message_id,
+    });
+  }
+}
+
+function slugify(title) {
+  const slug = title
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  return slug || `album-${Date.now()}`;
+}
+
+function photoFilename() {
+  return `bot-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.jpg`;
+}
+
+async function getUpload(env, uploadId) {
+  const raw = await env.PENDING_UPLOADS.get(`upload:${uploadId}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
 function isAllowed(env, userId) {
   const allowlist = parseAllowlist(env.ALLOWED_USER_IDS);
   return allowlist.length === 0 || allowlist.includes(String(userId));
@@ -156,11 +256,12 @@ function parseAllowlist(raw) {
 }
 
 async function sendMessage(env, chatId, text, extra = {}) {
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, ...extra }),
   });
+  return resp.json().catch(() => null);
 }
 
 async function editMessageText(env, chatId, messageId, text) {
@@ -245,17 +346,24 @@ async function getAlbumsJson(env) {
   return { albums, sha: data.sha };
 }
 
-async function addPhotoToAlbum(env, albumId, photoPath, alt) {
+// Appends a photo to the given album, creating it (using newAlbumTitle) if it
+// doesn't exist yet. Returns the album's title. Retries on a 409 (someone
+// else updated albums.json between our GET and PUT).
+async function addPhotoToAlbum(env, albumId, newAlbumTitle, photoPath, alt) {
   const maxAttempts = 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const { albums, sha } = await getAlbumsJson(env);
 
-    const album = albums.find((a) => a.id === albumId);
+    let album = albums.find((a) => a.id === albumId);
     if (!album) {
-      // The button list comes from this same data, so this should only ever
-      // happen if the album was deleted between the button being sent and tapped.
-      throw new Error(`Album "${albumId}" no longer exists`);
+      if (!newAlbumTitle) {
+        // The button list comes from this same data, so this should only ever
+        // happen if the album was deleted between the button being sent and tapped.
+        throw new Error(`Album "${albumId}" no longer exists`);
+      }
+      album = { id: albumId, title: newAlbumTitle, photos: [] };
+      albums.push(album);
     }
     album.photos.push({ src: photoPath, alt });
 
@@ -266,7 +374,7 @@ async function addPhotoToAlbum(env, albumId, photoPath, alt) {
         method: "PUT",
         headers: githubHeaders(env),
         body: JSON.stringify({
-          message: "Add photo submitted via Telegram bot",
+          message: newAlbumTitle ? `Create album "${newAlbumTitle}" from Telegram` : "Add photo submitted via Telegram bot",
           content: bytesToBase64(content),
           sha,
           branch: env.GITHUB_BRANCH,
@@ -274,7 +382,7 @@ async function addPhotoToAlbum(env, albumId, photoPath, alt) {
       }
     );
 
-    if (putResp.ok) return;
+    if (putResp.ok) return album.title;
 
     // Someone else updated albums.json between our GET and PUT — refetch the
     // sha and retry rather than clobbering their change.
