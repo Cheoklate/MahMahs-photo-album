@@ -48,12 +48,11 @@ arrows) to move through the rest of that album's photos.
      }
    ]
    ```
-3. Delete the `photos/childhood`, `photos/family-friends`, and
-   `photos/celebrations` placeholder folders (and their entries in
-   `js/albums.json`) once you have real albums in.
+Currently set up: `grandkids`, `kids`, and `80th-at-bali` — all start empty,
+ready for photos to be added.
 
 The album's cover thumbnail is always its first listed photo. Albums with zero
-photos (like `from-friends`, used by the Telegram bot — see below) are hidden
+photos are hidden
 from the home page until they have at least one photo.
 
 ## Deploy to GitHub Pages
