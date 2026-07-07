@@ -29,6 +29,8 @@
   {
     "id": "from-friends",
     "title": "From Friends & Family",
-    "photos": []
+    "photos": [
+      { "src": "photos/from-friends/bot-1783464633069-474960a8.jpg", "alt": "Shared by Greg" }
+    ]
   }
 ]
