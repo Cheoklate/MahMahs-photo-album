@@ -11,6 +11,7 @@ const closeBtn = lightbox.querySelector(".lightbox-close");
 const prevBtn = lightbox.querySelector(".lightbox-prev");
 const nextBtn = lightbox.querySelector(".lightbox-next");
 
+let albums = [];
 let currentAlbum = null;
 let currentIndex = 0;
 
@@ -20,7 +21,9 @@ function albumCover(album) {
 
 function renderAlbums() {
   albumsGrid.innerHTML = "";
-  albums.forEach((album) => {
+  // Albums start out empty when created by the Telegram bot, so skip any
+  // with no photos yet rather than showing a broken cover image.
+  albums.filter((album) => album.photos.length > 0).forEach((album) => {
     const figure = document.createElement("figure");
     figure.className = "album-card";
 
@@ -171,5 +174,16 @@ lightbox.addEventListener(
   { passive: true }
 );
 
-renderAlbums();
-route();
+async function init() {
+  try {
+    const response = await fetch("js/albums.json", { cache: "no-store" });
+    albums = await response.json();
+  } catch (err) {
+    console.error("Could not load albums.json", err);
+    albums = [];
+  }
+  renderAlbums();
+  route();
+}
+
+init();

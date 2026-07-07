@@ -5,7 +5,9 @@ can share it with her friends and family with just a link.
 
 ## Preview it locally
 
-Just open `index.html` in a browser, or run a tiny local server from this folder:
+The gallery loads its photo list from `js/albums.json` via `fetch()`, which
+browsers block when a page is opened directly as a `file://` URL — so you do
+need a local server (not just double-clicking `index.html`):
 
 ```
 python3 -m http.server 8000
@@ -31,28 +33,28 @@ arrows) to move through the rest of that album's photos.
 1. For each album, create a folder under `photos/` (e.g. `photos/wedding/`) and
    copy your photo files into it — JPG or PNG, ideally resized to under ~1500px
    wide so the site loads quickly.
-2. Open `js/albums.js` and edit the `albums` list. Each album needs a unique
-   `id`, a `title`, and a list of photos in the order you want them to appear:
+2. Open `js/albums.json` and edit the list. Each album needs a unique `id`, a
+   `title`, and a list of photos in the order you want them to appear:
 
-   ```js
-   const albums = [
+   ```json
+   [
      {
-       id: "wedding",
-       title: "Wedding Day",
-       photos: [
-         { src: "photos/wedding/ceremony.jpg", alt: "Wedding ceremony, 1968" },
-         { src: "photos/wedding/reception.jpg", alt: "Reception dance, 1968" },
-         // ...
-       ],
-     },
-     // more albums...
-   ];
+       "id": "wedding",
+       "title": "Wedding Day",
+       "photos": [
+         { "src": "photos/wedding/ceremony.jpg", "alt": "Wedding ceremony, 1968" },
+         { "src": "photos/wedding/reception.jpg", "alt": "Reception dance, 1968" }
+       ]
+     }
+   ]
    ```
 3. Delete the `photos/childhood`, `photos/family-friends`, and
    `photos/celebrations` placeholder folders (and their entries in
-   `js/albums.js`) once you have real albums in.
+   `js/albums.json`) once you have real albums in.
 
-The album's cover thumbnail is always its first listed photo.
+The album's cover thumbnail is always its first listed photo. Albums with zero
+photos (like `from-friends`, used by the Telegram bot — see below) are hidden
+from the home page until they have at least one photo.
 
 ## Deploy to GitHub Pages
 

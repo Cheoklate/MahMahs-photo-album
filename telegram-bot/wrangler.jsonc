@@ -1,0 +1,13 @@
+{
+  "name": "mahmahs-photo-bot",
+  "main": "src/worker.js",
+  "compatibility_date": "2024-11-01",
+  "vars": {
+    "GITHUB_OWNER": "Cheoklate",
+    "GITHUB_REPO": "MahMahs-photo-album",
+    "GITHUB_BRANCH": "main",
+    "ALBUM_ID": "from-friends",
+    "ALBUM_TITLE": "From Friends & Family",
+    "SITE_URL": "https://cheoklate.github.io/MahMahs-photo-album/"
+  }
+}
