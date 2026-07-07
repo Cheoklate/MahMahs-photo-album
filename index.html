@@ -19,7 +19,15 @@
 </header>
 
 <main>
-  <section id="gallery" class="gallery" aria-label="Photo gallery"></section>
+  <section id="albums-view" class="albums-view">
+    <div id="albums-grid" class="gallery" aria-label="Albums"></div>
+  </section>
+
+  <section id="album-view" class="album-view" hidden>
+    <button id="back-to-albums" class="back-button">&#8592; All Albums</button>
+    <h2 id="album-title"></h2>
+    <div id="album-grid" class="gallery" aria-label="Photos in album"></div>
+  </section>
 </main>
 
 <footer>
@@ -33,7 +41,7 @@
   <button class="lightbox-next" aria-label="Next photo">&#10095;</button>
 </div>
 
-<script src="js/photos.js"></script>
+<script src="js/albums.js"></script>
 <script src="js/script.js"></script>
 </body>
 </html>

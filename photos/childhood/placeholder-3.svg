@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
-  <rect width="800" height="600" fill="#e6d9ec"/>
+  <rect width="800" height="600" fill="#dfe7d0"/>
   <circle cx="400" cy="250" r="70" fill="#ffffff" opacity="0.5"/>
   <path d="M400 200 C 430 160, 480 160, 480 210 C 480 250, 440 280, 400 310 C 360 280, 320 250, 320 210 C 320 160, 370 160, 400 200 Z" fill="#c9a66b" opacity="0.6"/>
-  <text x="400" y="400" font-family="Georgia, serif" font-size="32" fill="#6b5b5b" text-anchor="middle">Photo 5</text>
-  <text x="400" y="440" font-family="Georgia, serif" font-size="18" fill="#8a7a72" text-anchor="middle">Replace me in photos/</text>
+  <text x="400" y="400" font-family="Georgia, serif" font-size="30" fill="#6b5b5b" text-anchor="middle">Childhood 3</text>
+  <text x="400" y="440" font-family="Georgia, serif" font-size="18" fill="#8a7a72" text-anchor="middle">Replace me</text>
 </svg>

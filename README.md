@@ -19,21 +19,40 @@ Then visit http://localhost:8000
   Add Grandma's name to the `<h1>` if you'd like (e.g. "Happy 80th Birthday, Grace!").
 - **Colors/fonts**: tweak the CSS variables at the top of `css/style.css`.
 
+## How it's organized
+
+Photos are grouped into **albums**. The home page shows a grid of albums (cover
+photo + title); tapping one opens that album's own photo grid; tapping a photo
+opens it full-screen where you can swipe (or use arrow keys / the on-screen
+arrows) to move through the rest of that album's photos.
+
 ## Add your real photos
 
-1. Copy your photo files into the `photos/` folder (JPG or PNG, ideally resized to
-   under ~1500px wide so the site loads quickly).
-2. Open `js/photos.js` and replace the placeholder entries with your real filenames,
-   in the order you want them to appear:
+1. For each album, create a folder under `photos/` (e.g. `photos/wedding/`) and
+   copy your photo files into it — JPG or PNG, ideally resized to under ~1500px
+   wide so the site loads quickly.
+2. Open `js/albums.js` and edit the `albums` list. Each album needs a unique
+   `id`, a `title`, and a list of photos in the order you want them to appear:
 
    ```js
-   const photos = [
-     { src: "photos/beach-1962.jpg", alt: "Grandma at the beach, 1962" },
-     { src: "photos/wedding-1968.jpg", alt: "Wedding day, 1968" },
-     // ...
+   const albums = [
+     {
+       id: "wedding",
+       title: "Wedding Day",
+       photos: [
+         { src: "photos/wedding/ceremony.jpg", alt: "Wedding ceremony, 1968" },
+         { src: "photos/wedding/reception.jpg", alt: "Reception dance, 1968" },
+         // ...
+       ],
+     },
+     // more albums...
    ];
    ```
-3. Delete the `placeholder-*.svg` files and their entries once you're done.
+3. Delete the `photos/childhood`, `photos/family-friends`, and
+   `photos/celebrations` placeholder folders (and their entries in
+   `js/albums.js`) once you have real albums in.
+
+The album's cover thumbnail is always its first listed photo.
 
 ## Deploy to GitHub Pages
 
