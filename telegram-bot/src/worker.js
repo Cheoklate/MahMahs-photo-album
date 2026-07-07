@@ -1,9 +1,15 @@
 // Telegram webhook -> GitHub Contents API bridge.
 //
-// Flow: a friend sends a photo to the bot -> Telegram calls this Worker ->
-// we download the photo from Telegram, commit it into photos/<ALBUM_ID>/ in
-// the GitHub repo, and append it to the matching album in js/albums.json.
-// Both commits go straight to `main`, which GitHub Pages auto-rebuilds.
+// Flow: a friend sends a photo -> the bot replies to that photo with inline
+// buttons, one per existing album -> tapping a button uploads the photo into
+// that album. Both commits go straight to `main`, which GitHub Pages
+// auto-rebuilds.
+//
+// The album choice is threaded statelessly: the button-picker message is
+// sent as a reply to the original photo message, so when the callback comes
+// back, `callback_query.message.reply_to_message` is that original photo
+// message again (Telegram preserves one level of reply nesting) — no need
+// for a database or KV store to remember which photo the buttons belong to.
 
 export default {
   async fetch(request, env) {
@@ -30,63 +36,116 @@ export default {
     // (and can back off/disable the webhook) on non-2xx responses, and we
     // don't want a downstream GitHub hiccup to trigger a retry storm.
     try {
-      await handleUpdate(update, env);
+      if (update.callback_query) {
+        await handleCallbackQuery(update.callback_query, env);
+      } else if (update.message) {
+        await handleMessage(update.message, env);
+      }
     } catch (err) {
-      console.error("handleUpdate failed", err);
+      console.error("Update handling failed", err);
     }
     return new Response("OK", { status: 200 });
   },
 };
 
-async function handleUpdate(update, env) {
-  const message = update.message;
-  if (!message) return;
-
+async function handleMessage(message, env) {
   const chatId = message.chat.id;
   const userId = message.from && message.from.id;
   const senderName = (message.from && message.from.first_name) || "a friend";
 
-  const allowlist = parseAllowlist(env.ALLOWED_USER_IDS);
-  if (allowlist.length > 0 && !allowlist.includes(String(userId))) {
+  if (!isAllowed(env, userId)) {
     await sendMessage(env, chatId, "Sorry, this bot is private and only accepts photos from approved family & friends.");
     return;
   }
 
   if (message.text === "/start") {
-    await sendMessage(
-      env,
-      chatId,
-      `Hi ${senderName}! Send me a photo and I'll add it to Grandma's 80th birthday album:\n${env.SITE_URL}`
-    );
+    await sendMessage(env, chatId, `Hi ${senderName}! Send me a photo and I'll ask which album to add it to.\n${env.SITE_URL}`);
     return;
   }
 
-  const photoSizes = message.photo;
-  if (!photoSizes || photoSizes.length === 0) {
-    await sendMessage(env, chatId, "Send me a photo (not a file/document) and I'll add it to the album!");
+  if (!message.photo || message.photo.length === 0) {
+    await sendMessage(env, chatId, "Send me a photo (not a file/document) and I'll add it to an album!");
     return;
   }
+
+  let albums;
+  try {
+    ({ albums } = await getAlbumsJson(env));
+  } catch (err) {
+    console.error("Failed to load albums for picker", err);
+    await sendMessage(env, chatId, "Sorry, I couldn't load the album list right now. Please try again in a moment.");
+    return;
+  }
+
+  if (albums.length === 0) {
+    await sendMessage(env, chatId, "There aren't any albums set up yet — ask the site owner to add one.");
+    return;
+  }
+
+  await sendMessage(env, chatId, "Which album should this go in?", {
+    reply_to_message_id: message.message_id,
+    reply_markup: {
+      inline_keyboard: albums.map((album) => [{ text: album.title, callback_data: `album:${album.id}` }]),
+    },
+  });
+}
+
+async function handleCallbackQuery(callbackQuery, env) {
+  const userId = callbackQuery.from && callbackQuery.from.id;
+  const senderName = (callbackQuery.from && callbackQuery.from.first_name) || "a friend";
+  const promptMessage = callbackQuery.message;
+  const chatId = promptMessage.chat.id;
+
+  if (!isAllowed(env, userId)) {
+    await answerCallbackQuery(env, callbackQuery.id, "Not authorized");
+    return;
+  }
+
+  const match = (callbackQuery.data || "").match(/^album:(.+)$/);
+  const photoMessage = promptMessage.reply_to_message;
+
+  if (!match || !photoMessage || !photoMessage.photo || photoMessage.photo.length === 0) {
+    await answerCallbackQuery(env, callbackQuery.id, "That photo is no longer available — please resend it.");
+    return;
+  }
+
+  const albumId = match[1];
 
   try {
+    const { albums } = await getAlbumsJson(env);
+    const album = albums.find((a) => a.id === albumId);
+    if (!album) {
+      await answerCallbackQuery(env, callbackQuery.id, "That album no longer exists.");
+      return;
+    }
+
     // Telegram sends multiple resolutions of the same photo; the last is the largest.
-    const largest = photoSizes[photoSizes.length - 1];
+    const largest = photoMessage.photo[photoMessage.photo.length - 1];
     const fileBytes = await downloadTelegramFile(env, largest.file_id);
 
     const filename = `bot-${Date.now()}-${crypto.randomUUID().slice(0, 8)}.jpg`;
-    const photoPath = `photos/${env.ALBUM_ID}/${filename}`;
+    const photoPath = `photos/${albumId}/${filename}`;
 
     await githubUploadPhoto(env, photoPath, fileBytes, senderName);
-    await addPhotoToAlbum(env, photoPath, message.caption || `Shared by ${senderName}`);
+    await addPhotoToAlbum(env, albumId, photoPath, photoMessage.caption || `Shared by ${senderName}`);
 
-    await sendMessage(
+    await answerCallbackQuery(env, callbackQuery.id, "Added!");
+    await editMessageText(
       env,
       chatId,
-      `Thanks! Your photo has been added to the album 🎉\n${env.SITE_URL}#/album/${env.ALBUM_ID}`
+      promptMessage.message_id,
+      `Thanks! Added to "${album.title}" 🎉\n${env.SITE_URL}#/album/${albumId}`
     );
   } catch (err) {
     console.error("Photo upload failed", err);
-    await sendMessage(env, chatId, "Sorry, something went wrong uploading that photo. Please try again in a moment.");
+    await answerCallbackQuery(env, callbackQuery.id, "Something went wrong");
+    await editMessageText(env, chatId, promptMessage.message_id, "Sorry, something went wrong uploading that photo. Please try again.");
   }
+}
+
+function isAllowed(env, userId) {
+  const allowlist = parseAllowlist(env.ALLOWED_USER_IDS);
+  return allowlist.length === 0 || allowlist.includes(String(userId));
 }
 
 function parseAllowlist(raw) {
@@ -96,11 +155,32 @@ function parseAllowlist(raw) {
     .filter(Boolean);
 }
 
-async function sendMessage(env, chatId, text) {
+async function sendMessage(env, chatId, text, extra = {}) {
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify({ chat_id: chatId, text, ...extra }),
+  });
+}
+
+async function editMessageText(env, chatId, messageId, text) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      reply_markup: { inline_keyboard: [] },
+    }),
+  });
+}
+
+async function answerCallbackQuery(env, callbackQueryId, text) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
   });
 }
 
@@ -165,16 +245,17 @@ async function getAlbumsJson(env) {
   return { albums, sha: data.sha };
 }
 
-async function addPhotoToAlbum(env, photoPath, alt) {
+async function addPhotoToAlbum(env, albumId, photoPath, alt) {
   const maxAttempts = 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const { albums, sha } = await getAlbumsJson(env);
 
-    let album = albums.find((a) => a.id === env.ALBUM_ID);
+    const album = albums.find((a) => a.id === albumId);
     if (!album) {
-      album = { id: env.ALBUM_ID, title: env.ALBUM_TITLE, photos: [] };
-      albums.push(album);
+      // The button list comes from this same data, so this should only ever
+      // happen if the album was deleted between the button being sent and tapped.
+      throw new Error(`Album "${albumId}" no longer exists`);
     }
     album.photos.push({ src: photoPath, alt });
 
