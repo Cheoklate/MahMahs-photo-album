@@ -3,34 +3,68 @@
     "id": "childhood",
     "title": "Childhood",
     "photos": [
-      { "src": "photos/childhood/placeholder-1.svg", "alt": "Childhood placeholder photo 1" },
-      { "src": "photos/childhood/placeholder-2.svg", "alt": "Childhood placeholder photo 2" },
-      { "src": "photos/childhood/placeholder-3.svg", "alt": "Childhood placeholder photo 3" }
+      {
+        "src": "photos/childhood/placeholder-1.svg",
+        "alt": "Childhood placeholder photo 1"
+      },
+      {
+        "src": "photos/childhood/placeholder-2.svg",
+        "alt": "Childhood placeholder photo 2"
+      },
+      {
+        "src": "photos/childhood/placeholder-3.svg",
+        "alt": "Childhood placeholder photo 3"
+      }
     ]
   },
   {
     "id": "family-friends",
     "title": "Family & Friends",
     "photos": [
-      { "src": "photos/family-friends/placeholder-1.svg", "alt": "Family & Friends placeholder photo 1" },
-      { "src": "photos/family-friends/placeholder-2.svg", "alt": "Family & Friends placeholder photo 2" },
-      { "src": "photos/family-friends/placeholder-3.svg", "alt": "Family & Friends placeholder photo 3" }
+      {
+        "src": "photos/family-friends/placeholder-1.svg",
+        "alt": "Family & Friends placeholder photo 1"
+      },
+      {
+        "src": "photos/family-friends/placeholder-2.svg",
+        "alt": "Family & Friends placeholder photo 2"
+      },
+      {
+        "src": "photos/family-friends/placeholder-3.svg",
+        "alt": "Family & Friends placeholder photo 3"
+      }
     ]
   },
   {
     "id": "celebrations",
     "title": "Celebrations",
     "photos": [
-      { "src": "photos/celebrations/placeholder-1.svg", "alt": "Celebrations placeholder photo 1" },
-      { "src": "photos/celebrations/placeholder-2.svg", "alt": "Celebrations placeholder photo 2" },
-      { "src": "photos/celebrations/placeholder-3.svg", "alt": "Celebrations placeholder photo 3" }
+      {
+        "src": "photos/celebrations/placeholder-1.svg",
+        "alt": "Celebrations placeholder photo 1"
+      },
+      {
+        "src": "photos/celebrations/placeholder-2.svg",
+        "alt": "Celebrations placeholder photo 2"
+      },
+      {
+        "src": "photos/celebrations/placeholder-3.svg",
+        "alt": "Celebrations placeholder photo 3"
+      }
     ]
   },
   {
     "id": "from-friends",
     "title": "From Friends & Family",
     "photos": [
-      { "src": "photos/from-friends/bot-1783464633069-474960a8.jpg", "alt": "Shared by Greg" }
+      {
+        "src": "photos/from-friends/bot-1783464633069-474960a8.jpg",
+        "alt": "Shared by Greg"
+      },
+      {
+        "src": "photos/from-friends/bot-1783464877285-90d84e14.jpg",
+        "alt": "Shared by Greg"
+      }
     ]
   }
 ]
