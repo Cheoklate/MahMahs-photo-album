@@ -113,23 +113,24 @@ let dragOffset = 0;
 let activePointerId = null;
 let isAnimating = false;
 
+// No wrap-around: past either end there's simply no photo to show.
 function photoAt(offset) {
-  const len = currentAlbum.photos.length;
-  const index = (currentIndex + offset + len) % len;
+  const index = currentIndex + offset;
+  if (index < 0 || index >= currentAlbum.photos.length) return null;
   return currentAlbum.photos[index];
 }
 
-function updateSlides() {
-  const prev = photoAt(-1);
-  const current = photoAt(0);
-  const next = photoAt(1);
+function setSlide(imgEl, photo) {
+  imgEl.src = photo ? photo.src : "";
+  imgEl.alt = photo ? photo.alt || "" : "";
+}
 
-  prevSlide.src = prev.src;
-  prevSlide.alt = prev.alt || "";
-  currentSlide.src = current.src;
-  currentSlide.alt = current.alt || "";
-  nextSlide.src = next.src;
-  nextSlide.alt = next.alt || "";
+function updateSlides() {
+  setSlide(prevSlide, photoAt(-1));
+  setSlide(currentSlide, photoAt(0));
+  setSlide(nextSlide, photoAt(1));
+  prevBtn.disabled = currentIndex === 0;
+  nextBtn.disabled = currentIndex === currentAlbum.photos.length - 1;
 }
 
 function setTrackPosition(offsetPx, withTransition) {
@@ -152,11 +153,16 @@ function closeLightbox() {
   document.body.style.overflow = "";
 }
 
-// direction: 1 to advance to the next photo, -1 for the previous photo
+// direction: 1 to advance to the next photo, -1 for the previous photo, or
+// 0 to just spring back to the current one. Springs back (rather than
+// moving) if direction points past either end of the album - no wrap-around.
 function settleTo(direction) {
   if (isAnimating) return;
 
-  if (direction === 0) {
+  const targetIndex = currentIndex + direction;
+  const canMove = direction !== 0 && targetIndex >= 0 && targetIndex < currentAlbum.photos.length;
+
+  if (!canMove) {
     setTrackPosition(0, true);
     return;
   }
@@ -166,7 +172,7 @@ function settleTo(direction) {
   lightboxTrack.addEventListener(
     "transitionend",
     () => {
-      currentIndex = (currentIndex + direction + currentAlbum.photos.length) % currentAlbum.photos.length;
+      currentIndex = targetIndex;
       updateSlides();
       setTrackPosition(0, false);
       isAnimating = false;
@@ -215,10 +221,20 @@ lightboxViewport.addEventListener("pointerdown", (event) => {
   lightboxViewport.setPointerCapture(activePointerId);
 });
 
+// At either end of the album, dragging toward the missing photo gets heavy
+// resistance instead of moving 1:1, so it reads as "hit the end" rather than
+// dragging into blank space.
+function withEdgeResistance(offset) {
+  const atStart = currentIndex === 0;
+  const atEnd = currentIndex === currentAlbum.photos.length - 1;
+  if ((offset > 0 && atStart) || (offset < 0 && atEnd)) return offset / 4;
+  return offset;
+}
+
 lightboxViewport.addEventListener("pointermove", (event) => {
   if (dragStartX === null || event.pointerId !== activePointerId) return;
   dragOffset = event.clientX - dragStartX;
-  setTrackPosition(dragOffset, false);
+  setTrackPosition(withEdgeResistance(dragOffset), false);
 });
 
 function endDrag(event) {

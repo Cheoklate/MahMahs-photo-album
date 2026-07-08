@@ -231,6 +231,12 @@ footer p {
   transform: translateY(-50%);
 }
 
+.lightbox-prev:disabled,
+.lightbox-next:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* Larger screens: more breathing room and hover affordances.
    Hover lift is gated on devices that actually support hover, so it
    doesn't get "stuck" active after a tap on touchscreens. */
