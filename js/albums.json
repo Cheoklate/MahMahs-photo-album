@@ -2,7 +2,13 @@
   {
     "id": "grandkids",
     "title": "Grandkids",
-    "photos": []
+    "photos": [
+      { "src": "photos/grandkids/grandkids-isabelle.png", "alt": "Grandkids photo" },
+      { "src": "photos/grandkids/grandkids-01.jpg", "alt": "Grandkids photo" },
+      { "src": "photos/grandkids/grandkids-02.jpg", "alt": "Grandkids photo" },
+      { "src": "photos/grandkids/grandkids-03.jpg", "alt": "Grandkids photo" },
+      { "src": "photos/grandkids/grandkids-04.jpg", "alt": "Grandkids photo" }
+    ]
   },
   {
     "id": "kids",
