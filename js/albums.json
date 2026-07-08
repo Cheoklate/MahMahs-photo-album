@@ -3,11 +3,26 @@
     "id": "grandkids",
     "title": "Grandkids",
     "photos": [
-      { "src": "photos/grandkids/grandkids-isabelle.png", "alt": "Grandkids photo" },
-      { "src": "photos/grandkids/grandkids-01.jpg", "alt": "Grandkids photo" },
-      { "src": "photos/grandkids/grandkids-02.jpg", "alt": "Grandkids photo" },
-      { "src": "photos/grandkids/grandkids-03.jpg", "alt": "Grandkids photo" },
-      { "src": "photos/grandkids/grandkids-04.jpg", "alt": "Grandkids photo" }
+      {
+        "src": "photos/grandkids/grandkids-isabelle.png",
+        "alt": "Grandkids photo"
+      },
+      {
+        "src": "photos/grandkids/grandkids-01.jpg",
+        "alt": "Grandkids photo"
+      },
+      {
+        "src": "photos/grandkids/grandkids-02.jpg",
+        "alt": "Grandkids photo"
+      },
+      {
+        "src": "photos/grandkids/grandkids-03.jpg",
+        "alt": "Grandkids photo"
+      },
+      {
+        "src": "photos/grandkids/grandkids-04.jpg",
+        "alt": "Grandkids photo"
+      }
     ]
   },
   {
@@ -24,24 +39,42 @@
     "id": "ugly-dog",
     "title": "Ugly Dog",
     "photos": [
-      { "src": "photos/ugly-dog/ugly-dog-01.jpg", "alt": "Ugly Dog photo" }
+      {
+        "src": "photos/ugly-dog/ugly-dog-01.jpg",
+        "alt": "Ugly Dog photo"
+      }
     ]
   },
   {
     "id": "80th-with-friends",
     "title": "80th with Friends",
     "photos": [
-      { "src": "photos/80th-with-friends/80th-with-friends-01.jpg", "alt": "80th with Friends photo" },
-      { "src": "photos/80th-with-friends/80th-with-friends-02.jpg", "alt": "80th with Friends photo" }
+      {
+        "src": "photos/80th-with-friends/80th-with-friends-01.jpg",
+        "alt": "80th with Friends photo"
+      },
+      {
+        "src": "photos/80th-with-friends/80th-with-friends-02.jpg",
+        "alt": "80th with Friends photo"
+      }
     ]
   },
   {
     "id": "funny",
     "title": "Funny",
     "photos": [
-      { "src": "photos/funny/funny-01.jpg", "alt": "Funny photo" },
-      { "src": "photos/funny/funny-02.jpg", "alt": "Funny photo" },
-      { "src": "photos/funny/funny-03.jpg", "alt": "Funny photo" }
+      {
+        "src": "photos/funny/funny-03.jpg",
+        "alt": "Funny photo"
+      },
+      {
+        "src": "photos/funny/funny-02.jpg",
+        "alt": "Funny photo"
+      },
+      {
+        "src": "photos/funny/funny-01.jpg",
+        "alt": "Funny photo"
+      }
     ]
   }
 ]
