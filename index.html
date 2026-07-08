@@ -8,7 +8,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Lora:ital@0;1&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<!-- ?v= is bumped whenever style.css or script.js changes: GitHub Pages caches
+     assets for 10 minutes with no way to disable it, so without a new URL a
+     browser can keep serving a stale script.js/style.css after a deploy. -->
+<link rel="stylesheet" href="css/style.css?v=2">
 </head>
 <body>
 
@@ -48,6 +51,6 @@
   <button class="lightbox-next" aria-label="Next photo">&#10095;</button>
 </div>
 
-<script src="js/script.js"></script>
+<script src="js/script.js?v=2"></script>
 </body>
 </html>

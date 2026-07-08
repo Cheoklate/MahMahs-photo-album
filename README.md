@@ -78,6 +78,16 @@ from the home page until they have at least one photo.
 
    That's the link you can share with Grandma's friends.
 
+### A cache-busting note
+
+GitHub Pages caches every file for 10 minutes with no way to turn that off, so
+after deploying a change to `css/style.css` or `js/script.js`, a visitor's
+browser can keep serving the old version of one file alongside the new
+version of the other — which can break things if the two are out of sync.
+`index.html` links to them as `style.css?v=2` / `script.js?v=2`; bump that
+number whenever you edit either file so browsers are forced to fetch the new
+version instead of an old cached one.
+
 ### A privacy note
 
 GitHub Pages sites are public — anyone with the link can view them, and (unlike a
