@@ -54,13 +54,15 @@ async function handleMessage(message, env) {
   const userId = message.from && message.from.id;
   const senderName = (message.from && message.from.first_name) || "a friend";
 
-  if (message.text && /^\/(adduser|removeuser|listusers|reorder)\b/.test(message.text)) {
+  if (message.text && /^\/(adduser|removeuser|listusers|reorder|commands)\b/.test(message.text)) {
     if (!isAdmin(env, userId)) {
       await sendMessage(env, chatId, "Only the site owner can do that.");
       return;
     }
     if (message.text.startsWith("/reorder")) {
       await handleReorderCommand(message, env);
+    } else if (message.text.startsWith("/commands")) {
+      await handleCommandsList(message, env);
     } else {
       await handleAdminCommand(message, env);
     }
@@ -300,6 +302,19 @@ function parseIdList(raw) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+const ADMIN_COMMANDS_HELP = `Admin commands:
+/adduser <telegram id> - allow someone to submit photos
+/removeuser <telegram id> - revoke someone's access
+/listusers - show everyone currently allowed to submit photos
+/reorder <album id> - change the photo order within an album
+/commands - show this list
+
+Anyone allowed to submit photos (including you) can just send a photo to add it to an album.`;
+
+async function handleCommandsList(message, env) {
+  await sendMessage(env, message.chat.id, ADMIN_COMMANDS_HELP);
 }
 
 async function handleAdminCommand(message, env) {
