@@ -34,5 +34,14 @@
       { "src": "photos/80th-with-friends/80th-with-friends-01.jpg", "alt": "80th with Friends photo" },
       { "src": "photos/80th-with-friends/80th-with-friends-02.jpg", "alt": "80th with Friends photo" }
     ]
+  },
+  {
+    "id": "funny",
+    "title": "Funny",
+    "photos": [
+      { "src": "photos/funny/funny-01.jpg", "alt": "Funny photo" },
+      { "src": "photos/funny/funny-02.jpg", "alt": "Funny photo" },
+      { "src": "photos/funny/funny-03.jpg", "alt": "Funny photo" }
+    ]
   }
 ]
