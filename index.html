@@ -32,12 +32,19 @@
 
 <footer>
   <p>Made with love, for the best grandmother in the world.</p>
+  <p>Made by Gregory the Great</p>
 </footer>
 
 <div id="lightbox" class="lightbox" hidden>
   <button class="lightbox-close" aria-label="Close">&times;</button>
   <button class="lightbox-prev" aria-label="Previous photo">&#10094;</button>
-  <img class="lightbox-image" src="" alt="">
+  <div class="lightbox-viewport">
+    <div class="lightbox-track">
+      <img class="lightbox-slide" data-slide="prev" src="" alt="" draggable="false">
+      <img class="lightbox-slide" data-slide="current" src="" alt="" draggable="false">
+      <img class="lightbox-slide" data-slide="next" src="" alt="" draggable="false">
+    </div>
+  </div>
   <button class="lightbox-next" aria-label="Next photo">&#10095;</button>
 </div>
 

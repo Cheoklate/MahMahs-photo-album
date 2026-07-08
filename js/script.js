@@ -6,7 +6,11 @@ const albumTitleEl = document.getElementById("album-title");
 const backButton = document.getElementById("back-to-albums");
 
 const lightbox = document.getElementById("lightbox");
-const lightboxImage = lightbox.querySelector(".lightbox-image");
+const lightboxViewport = lightbox.querySelector(".lightbox-viewport");
+const lightboxTrack = lightbox.querySelector(".lightbox-track");
+const prevSlide = lightbox.querySelector('[data-slide="prev"]');
+const currentSlide = lightbox.querySelector('[data-slide="current"]');
+const nextSlide = lightbox.querySelector('[data-slide="next"]');
 const closeBtn = lightbox.querySelector(".lightbox-close");
 const prevBtn = lightbox.querySelector(".lightbox-prev");
 const nextBtn = lightbox.querySelector(".lightbox-next");
@@ -96,14 +100,51 @@ backButton.addEventListener("click", () => {
 
 window.addEventListener("hashchange", route);
 
-// Lightbox — scoped to whichever album is currently open
+// Lightbox — scoped to whichever album is currently open.
+//
+// The track holds 3 slides (prev/current/next) side by side. Dragging moves
+// the track 1:1 with the pointer so the neighboring photo peeks in as you
+// go, like Instagram; releasing past a distance threshold finishes the
+// slide into place, otherwise it springs back to the current photo.
+
+let viewportWidth = 0;
+let dragStartX = null;
+let dragOffset = 0;
+let activePointerId = null;
+let isAnimating = false;
+
+function photoAt(offset) {
+  const len = currentAlbum.photos.length;
+  const index = (currentIndex + offset + len) % len;
+  return currentAlbum.photos[index];
+}
+
+function updateSlides() {
+  const prev = photoAt(-1);
+  const current = photoAt(0);
+  const next = photoAt(1);
+
+  prevSlide.src = prev.src;
+  prevSlide.alt = prev.alt || "";
+  currentSlide.src = current.src;
+  currentSlide.alt = current.alt || "";
+  nextSlide.src = next.src;
+  nextSlide.alt = next.alt || "";
+}
+
+function setTrackPosition(offsetPx, withTransition) {
+  lightboxTrack.style.transition = withTransition ? "transform 0.25s ease" : "none";
+  lightboxTrack.style.transform = `translateX(${-viewportWidth + offsetPx}px)`;
+}
 
 function openLightbox(album, index) {
   currentAlbum = album;
   currentIndex = index;
-  showPhoto();
   lightbox.hidden = false;
   document.body.style.overflow = "hidden";
+  viewportWidth = lightboxViewport.getBoundingClientRect().width;
+  updateSlides();
+  setTrackPosition(0, false);
 }
 
 function closeLightbox() {
@@ -111,20 +152,35 @@ function closeLightbox() {
   document.body.style.overflow = "";
 }
 
-function showPhoto() {
-  const photo = currentAlbum.photos[currentIndex];
-  lightboxImage.src = photo.src;
-  lightboxImage.alt = photo.alt || "";
+// direction: 1 to advance to the next photo, -1 for the previous photo
+function settleTo(direction) {
+  if (isAnimating) return;
+
+  if (direction === 0) {
+    setTrackPosition(0, true);
+    return;
+  }
+
+  isAnimating = true;
+  setTrackPosition(-direction * viewportWidth, true);
+  lightboxTrack.addEventListener(
+    "transitionend",
+    () => {
+      currentIndex = (currentIndex + direction + currentAlbum.photos.length) % currentAlbum.photos.length;
+      updateSlides();
+      setTrackPosition(0, false);
+      isAnimating = false;
+    },
+    { once: true }
+  );
 }
 
 function showNext() {
-  currentIndex = (currentIndex + 1) % currentAlbum.photos.length;
-  showPhoto();
+  settleTo(1);
 }
 
 function showPrev() {
-  currentIndex = (currentIndex - 1 + currentAlbum.photos.length) % currentAlbum.photos.length;
-  showPhoto();
+  settleTo(-1);
 }
 
 closeBtn.addEventListener("click", closeLightbox);
@@ -142,37 +198,48 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft") showPrev();
 });
 
-// Touch swipe support (mobile) — swipe left/right to move between photos
-let touchStartX = null;
-let touchStartY = null;
+window.addEventListener("resize", () => {
+  if (lightbox.hidden) return;
+  viewportWidth = lightboxViewport.getBoundingClientRect().width;
+  setTrackPosition(dragStartX === null ? 0 : dragOffset, false);
+});
 
-lightbox.addEventListener(
-  "touchstart",
-  (event) => {
-    touchStartX = event.changedTouches[0].clientX;
-    touchStartY = event.changedTouches[0].clientY;
-  },
-  { passive: true }
-);
+// Drag-to-swipe (touch, mouse, and pen alike via Pointer Events)
+const DRAG_THRESHOLD_RATIO = 0.2;
 
-lightbox.addEventListener(
-  "touchend",
-  (event) => {
-    if (touchStartX === null) return;
-    const dx = event.changedTouches[0].clientX - touchStartX;
-    const dy = event.changedTouches[0].clientY - touchStartY;
+lightboxViewport.addEventListener("pointerdown", (event) => {
+  if (isAnimating) return;
+  activePointerId = event.pointerId;
+  dragStartX = event.clientX;
+  dragOffset = 0;
+  lightboxViewport.setPointerCapture(activePointerId);
+});
 
-    // Ignore mostly-vertical swipes so scrolling gestures aren't mistaken for navigation
-    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-      if (dx < 0) showNext();
-      else showPrev();
-    }
+lightboxViewport.addEventListener("pointermove", (event) => {
+  if (dragStartX === null || event.pointerId !== activePointerId) return;
+  dragOffset = event.clientX - dragStartX;
+  setTrackPosition(dragOffset, false);
+});
 
-    touchStartX = null;
-    touchStartY = null;
-  },
-  { passive: true }
-);
+function endDrag(event) {
+  if (dragStartX === null || event.pointerId !== activePointerId) return;
+
+  const threshold = viewportWidth * DRAG_THRESHOLD_RATIO;
+  if (dragOffset <= -threshold) {
+    settleTo(1);
+  } else if (dragOffset >= threshold) {
+    settleTo(-1);
+  } else {
+    settleTo(0);
+  }
+
+  dragStartX = null;
+  dragOffset = 0;
+  activePointerId = null;
+}
+
+lightboxViewport.addEventListener("pointerup", endDrag);
+lightboxViewport.addEventListener("pointercancel", endDrag);
 
 async function init() {
   try {
