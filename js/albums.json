@@ -19,5 +19,12 @@
     "id": "80th-at-bali",
     "title": "80th at Bali",
     "photos": []
+  },
+  {
+    "id": "ugly-dog",
+    "title": "Ugly Dog",
+    "photos": [
+      { "src": "photos/ugly-dog/ugly-dog-01.jpg", "alt": "Ugly Dog photo" }
+    ]
   }
 ]
