@@ -54,12 +54,16 @@ async function handleMessage(message, env) {
   const userId = message.from && message.from.id;
   const senderName = (message.from && message.from.first_name) || "a friend";
 
-  if (message.text && /^\/(adduser|removeuser|listusers)\b/.test(message.text)) {
+  if (message.text && /^\/(adduser|removeuser|listusers|reorder)\b/.test(message.text)) {
     if (!isAdmin(env, userId)) {
-      await sendMessage(env, chatId, "Only the site owner can manage who's allowed to use this bot.");
+      await sendMessage(env, chatId, "Only the site owner can do that.");
       return;
     }
-    await handleAdminCommand(message, env);
+    if (message.text.startsWith("/reorder")) {
+      await handleReorderCommand(message, env);
+    } else {
+      await handleAdminCommand(message, env);
+    }
     return;
   }
 
@@ -68,12 +72,21 @@ async function handleMessage(message, env) {
     return;
   }
 
-  // Is this a reply providing a name for a new album?
+  // Is this a reply to an earlier prompt (new album name, or photo reorder)?
   if (message.reply_to_message) {
-    const pendingKey = `pendingAlbumName:${message.reply_to_message.message_id}`;
-    const uploadId = await env.PENDING_UPLOADS.get(pendingKey);
+    const replyId = message.reply_to_message.message_id;
+
+    const pendingAlbumNameKey = `pendingAlbumName:${replyId}`;
+    const uploadId = await env.PENDING_UPLOADS.get(pendingAlbumNameKey);
     if (uploadId) {
-      await handleNewAlbumName(uploadId, pendingKey, message, env);
+      await handleNewAlbumName(uploadId, pendingAlbumNameKey, message, env);
+      return;
+    }
+
+    const pendingReorderKey = `pendingReorder:${replyId}`;
+    const reorderAlbumId = await env.PENDING_UPLOADS.get(pendingReorderKey);
+    if (reorderAlbumId) {
+      await handleReorderReply(reorderAlbumId, pendingReorderKey, message, env);
       return;
     }
   }
@@ -334,6 +347,78 @@ async function handleAdminCommand(message, env) {
   }
 }
 
+async function handleReorderCommand(message, env) {
+  const chatId = message.chat.id;
+  const albumId = message.text.trim().split(/\s+/)[1];
+
+  let albums;
+  try {
+    ({ albums } = await getAlbumsJson(env));
+  } catch (err) {
+    console.error("Failed to load albums for reorder", err);
+    await sendMessage(env, chatId, "Sorry, I couldn't load the album list right now. Please try again in a moment.");
+    return;
+  }
+
+  if (!albumId) {
+    const list = albums.map((a) => `${a.id} (${a.photos.length} photo${a.photos.length === 1 ? "" : "s"})`).join("\n");
+    await sendMessage(env, chatId, `Usage: /reorder <album id>\n\nAlbums:\n${list}`);
+    return;
+  }
+
+  const album = albums.find((a) => a.id === albumId);
+  if (!album) {
+    await sendMessage(env, chatId, `No album called "${albumId}". Send /reorder with no arguments to see valid ids.`);
+    return;
+  }
+
+  if (album.photos.length < 2) {
+    await sendMessage(env, chatId, `"${album.title}" has ${album.photos.length} photo(s) — nothing to reorder.`);
+    return;
+  }
+
+  for (let i = 0; i < album.photos.length; i++) {
+    await sendPhotoByUrl(env, chatId, album.photos[i].src, `${i + 1}`);
+  }
+
+  const example = Array.from({ length: album.photos.length }, (_, i) => album.photos.length - i).join(" ");
+  const sent = await sendMessage(
+    env,
+    chatId,
+    `Reply with the new order as space-separated numbers 1-${album.photos.length} (e.g. "${example}" to fully reverse), or "cancel".`,
+    { reply_markup: { force_reply: true, selective: true } }
+  );
+  if (sent && sent.result) {
+    await env.PENDING_UPLOADS.put(`pendingReorder:${sent.result.message_id}`, albumId, { expirationTtl: UPLOAD_TTL_SECONDS });
+  }
+}
+
+async function handleReorderReply(albumId, pendingKey, message, env) {
+  const chatId = message.chat.id;
+  const text = (message.text || "").trim();
+
+  if (/^cancel$/i.test(text)) {
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, "Reorder cancelled.", { reply_to_message_id: message.message_id });
+    return;
+  }
+
+  const order = text.split(/\s+/).map((s) => parseInt(s, 10));
+
+  try {
+    const finalTitle = await reorderAlbum(env, albumId, order);
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, `Reordered "${finalTitle}" 🎉\n${env.SITE_URL}#/album/${albumId}`, {
+      reply_to_message_id: message.message_id,
+    });
+  } catch (err) {
+    // Leave the pending state in place so they can just reply again with a corrected order.
+    await sendMessage(env, chatId, `${err.message} Reply again with a corrected order, or "cancel".`, {
+      reply_to_message_id: message.message_id,
+    });
+  }
+}
+
 async function sendMessage(env, chatId, text, extra = {}) {
   const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -353,6 +438,14 @@ async function editMessageText(env, chatId, messageId, text) {
       text,
       reply_markup: { inline_keyboard: [] },
     }),
+  });
+}
+
+async function sendPhotoByUrl(env, chatId, relativeSrc, caption) {
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, photo: `${env.SITE_URL}${relativeSrc}`, caption }),
   });
 }
 
@@ -465,6 +558,52 @@ async function addPhotoToAlbum(env, albumId, newAlbumTitle, photoPath, alt) {
 
     // Someone else updated albums.json between our GET and PUT — refetch the
     // sha and retry rather than clobbering their change.
+    if (putResp.status === 409 && attempt < maxAttempts) continue;
+
+    throw new Error(`GitHub albums.json update failed: ${putResp.status} ${await putResp.text()}`);
+  }
+}
+
+// order is a 1-indexed permutation, e.g. [3, 1, 2] moves photo 3 to the
+// front. Validated fresh on each attempt since the photo count could in
+// theory change between the numbered listing and this reply.
+async function reorderAlbum(env, albumId, order) {
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { albums, sha } = await getAlbumsJson(env);
+    const album = albums.find((a) => a.id === albumId);
+    if (!album) {
+      throw new Error(`Album "${albumId}" no longer exists.`);
+    }
+
+    const n = album.photos.length;
+    const isValidOrder =
+      order.length === n && order.every((x) => Number.isInteger(x) && x >= 1 && x <= n) && new Set(order).size === n;
+
+    if (!isValidOrder) {
+      throw new Error(`That's not a valid ordering — I need exactly the numbers 1-${n}, each once.`);
+    }
+
+    album.photos = order.map((position) => album.photos[position - 1]);
+
+    const content = new TextEncoder().encode(JSON.stringify(albums, null, 2) + "\n");
+    const putResp = await fetch(
+      `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/js/albums.json`,
+      {
+        method: "PUT",
+        headers: githubHeaders(env),
+        body: JSON.stringify({
+          message: `Reorder album "${albumId}" from Telegram`,
+          content: bytesToBase64(content),
+          sha,
+          branch: env.GITHUB_BRANCH,
+        }),
+      }
+    );
+
+    if (putResp.ok) return album.title;
+
     if (putResp.status === 409 && attempt < maxAttempts) continue;
 
     throw new Error(`GitHub albums.json update failed: ${putResp.status} ${await putResp.text()}`);
