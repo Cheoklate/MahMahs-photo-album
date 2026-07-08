@@ -54,7 +54,16 @@ async function handleMessage(message, env) {
   const userId = message.from && message.from.id;
   const senderName = (message.from && message.from.first_name) || "a friend";
 
-  if (!isAllowed(env, userId)) {
+  if (message.text && /^\/(adduser|removeuser|listusers)\b/.test(message.text)) {
+    if (!isAdmin(env, userId)) {
+      await sendMessage(env, chatId, "Only the site owner can manage who's allowed to use this bot.");
+      return;
+    }
+    await handleAdminCommand(message, env);
+    return;
+  }
+
+  if (!(await isAllowed(env, userId))) {
     await sendMessage(env, chatId, "Sorry, this bot is private and only accepts photos from approved family & friends.");
     return;
   }
@@ -111,7 +120,7 @@ async function handleCallbackQuery(callbackQuery, env) {
   const chatId = promptMessage.chat.id;
   const data = callbackQuery.data || "";
 
-  if (!isAllowed(env, userId)) {
+  if (!(await isAllowed(env, userId))) {
     await answerCallbackQuery(env, callbackQuery.id, "Not authorized");
     return;
   }
@@ -243,16 +252,86 @@ async function getUpload(env, uploadId) {
   return raw ? JSON.parse(raw) : null;
 }
 
-function isAllowed(env, userId) {
-  const allowlist = parseAllowlist(env.ALLOWED_USER_IDS);
+const ALLOWLIST_KV_KEY = "config:allowlist";
+
+// The submission allowlist lives in KV (so /adduser etc. can edit it at
+// runtime) but starts out seeded from the ALLOWED_USER_IDS secret set up
+// during initial deploy - once anyone runs an admin command it "forks" into
+// KV and the secret is no longer consulted.
+async function getAllowlist(env) {
+  const stored = await env.PENDING_UPLOADS.get(ALLOWLIST_KV_KEY);
+  if (stored) return JSON.parse(stored);
+  return parseIdList(env.ALLOWED_USER_IDS);
+}
+
+async function saveAllowlist(env, ids) {
+  await env.PENDING_UPLOADS.put(ALLOWLIST_KV_KEY, JSON.stringify(ids));
+}
+
+async function isAllowed(env, userId) {
+  const allowlist = await getAllowlist(env);
   return allowlist.length === 0 || allowlist.includes(String(userId));
 }
 
-function parseAllowlist(raw) {
+// Admins (who can run /adduser, /removeuser, /listusers) are a fixed, separate
+// list from the submission allowlist - only the site owner, set via the
+// ADMIN_USER_IDS secret. Unlike the allowlist, this is never editable from
+// within Telegram itself.
+function isAdmin(env, userId) {
+  const admins = parseIdList(env.ADMIN_USER_IDS);
+  return admins.includes(String(userId));
+}
+
+function parseIdList(raw) {
   return (raw || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+async function handleAdminCommand(message, env) {
+  const chatId = message.chat.id;
+  const parts = message.text.trim().split(/\s+/);
+  const command = parts[0];
+
+  if (command === "/listusers") {
+    const allowlist = await getAllowlist(env);
+    const body = allowlist.length > 0 ? allowlist.join("\n") : "(empty - currently open to anyone)";
+    await sendMessage(env, chatId, `Allowed user IDs:\n${body}`);
+    return;
+  }
+
+  const targetId = parts[1];
+  if (!targetId || !/^\d+$/.test(targetId)) {
+    await sendMessage(
+      env,
+      chatId,
+      "Usage:\n/adduser <telegram id>\n/removeuser <telegram id>\n/listusers\n\nAsk them to message @userinfobot to get their id."
+    );
+    return;
+  }
+
+  const allowlist = await getAllowlist(env);
+
+  if (command === "/adduser") {
+    if (allowlist.includes(targetId)) {
+      await sendMessage(env, chatId, `${targetId} is already allowed.`);
+      return;
+    }
+    allowlist.push(targetId);
+    await saveAllowlist(env, allowlist);
+    await sendMessage(env, chatId, `Added ${targetId}. They can now message this bot to add photos. (${allowlist.length} allowed in total.)`);
+    return;
+  }
+
+  if (command === "/removeuser") {
+    if (!allowlist.includes(targetId)) {
+      await sendMessage(env, chatId, `${targetId} wasn't on the list.`);
+      return;
+    }
+    await saveAllowlist(env, allowlist.filter((id) => id !== targetId));
+    await sendMessage(env, chatId, `Removed ${targetId}.`);
+  }
 }
 
 async function sendMessage(env, chatId, text, extra = {}) {
