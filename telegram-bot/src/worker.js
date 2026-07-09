@@ -54,13 +54,17 @@ async function handleMessage(message, env) {
   const userId = message.from && message.from.id;
   const senderName = (message.from && message.from.first_name) || "a friend";
 
-  if (message.text && /^\/(adduser|removeuser|listusers|reorder|commands)\b/.test(message.text)) {
+  if (message.text && /^\/(adduser|removeuser|listusers|reorder|deletealbum|deletephoto|commands)\b/.test(message.text)) {
     if (!isAdmin(env, userId)) {
       await sendMessage(env, chatId, "Only the site owner can do that.");
       return;
     }
     if (message.text.startsWith("/reorder")) {
       await handleReorderCommand(message, env);
+    } else if (message.text.startsWith("/deletealbum")) {
+      await handleDeleteAlbumCommand(message, env);
+    } else if (message.text.startsWith("/deletephoto")) {
+      await handleDeletePhotoCommand(message, env);
     } else if (message.text.startsWith("/commands")) {
       await handleCommandsList(message, env);
     } else {
@@ -89,6 +93,20 @@ async function handleMessage(message, env) {
     const reorderAlbumId = await env.PENDING_UPLOADS.get(pendingReorderKey);
     if (reorderAlbumId) {
       await handleReorderReply(reorderAlbumId, pendingReorderKey, message, env);
+      return;
+    }
+
+    const pendingDeleteAlbumKey = `pendingDeleteAlbum:${replyId}`;
+    const deleteAlbumId = await env.PENDING_UPLOADS.get(pendingDeleteAlbumKey);
+    if (deleteAlbumId) {
+      await handleDeleteAlbumReply(deleteAlbumId, pendingDeleteAlbumKey, message, env);
+      return;
+    }
+
+    const pendingDeletePhotoKey = `pendingDeletePhoto:${replyId}`;
+    const deletePhotoAlbumId = await env.PENDING_UPLOADS.get(pendingDeletePhotoKey);
+    if (deletePhotoAlbumId) {
+      await handleDeletePhotoReply(deletePhotoAlbumId, pendingDeletePhotoKey, message, env);
       return;
     }
   }
@@ -309,6 +327,8 @@ const ADMIN_COMMANDS_HELP = `Admin commands:
 /removeuser <telegram id> - revoke someone's access
 /listusers - show everyone currently allowed to submit photos
 /reorder <album id> - change the photo order within an album
+/deletealbum <album id> - delete an album and all its photos
+/deletephoto <album id> - delete a single photo from an album
 /commands - show this list
 
 Anyone allowed to submit photos (including you) can just send a photo to add it to an album.`;
@@ -434,6 +454,136 @@ async function handleReorderReply(albumId, pendingKey, message, env) {
   }
 }
 
+async function handleDeleteAlbumCommand(message, env) {
+  const chatId = message.chat.id;
+  const albumId = message.text.trim().split(/\s+/)[1];
+
+  let albums;
+  try {
+    ({ albums } = await getAlbumsJson(env));
+  } catch (err) {
+    console.error("Failed to load albums for delete", err);
+    await sendMessage(env, chatId, "Sorry, I couldn't load the album list right now. Please try again in a moment.");
+    return;
+  }
+
+  if (!albumId) {
+    const list = albums.map((a) => `${a.id} (${a.photos.length} photo${a.photos.length === 1 ? "" : "s"})`).join("\n");
+    await sendMessage(env, chatId, `Usage: /deletealbum <album id>\n\nAlbums:\n${list}`);
+    return;
+  }
+
+  const album = albums.find((a) => a.id === albumId);
+  if (!album) {
+    await sendMessage(env, chatId, `No album called "${albumId}". Send /deletealbum with no arguments to see valid ids.`);
+    return;
+  }
+
+  const sent = await sendMessage(
+    env,
+    chatId,
+    `Delete "${album.title}" and all ${album.photos.length} photo${album.photos.length === 1 ? "" : "s"} in it? This can't be undone. Reply YES to confirm, or "cancel".`,
+    { reply_markup: { force_reply: true, selective: true } }
+  );
+  if (sent && sent.result) {
+    await env.PENDING_UPLOADS.put(`pendingDeleteAlbum:${sent.result.message_id}`, albumId, { expirationTtl: UPLOAD_TTL_SECONDS });
+  }
+}
+
+async function handleDeleteAlbumReply(albumId, pendingKey, message, env) {
+  const chatId = message.chat.id;
+  const text = (message.text || "").trim();
+  const senderName = (message.from && message.from.first_name) || "an admin";
+
+  if (!/^yes$/i.test(text)) {
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, "Delete cancelled.", { reply_to_message_id: message.message_id });
+    return;
+  }
+
+  try {
+    const title = await deleteAlbum(env, albumId, senderName);
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, `Deleted "${title}" and its photos.`, { reply_to_message_id: message.message_id });
+  } catch (err) {
+    console.error("Album delete failed", err);
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, `Sorry, something went wrong deleting that album: ${err.message}`, {
+      reply_to_message_id: message.message_id,
+    });
+  }
+}
+
+async function handleDeletePhotoCommand(message, env) {
+  const chatId = message.chat.id;
+  const albumId = message.text.trim().split(/\s+/)[1];
+
+  let albums;
+  try {
+    ({ albums } = await getAlbumsJson(env));
+  } catch (err) {
+    console.error("Failed to load albums for delete", err);
+    await sendMessage(env, chatId, "Sorry, I couldn't load the album list right now. Please try again in a moment.");
+    return;
+  }
+
+  if (!albumId) {
+    const list = albums.map((a) => `${a.id} (${a.photos.length} photo${a.photos.length === 1 ? "" : "s"})`).join("\n");
+    await sendMessage(env, chatId, `Usage: /deletephoto <album id>\n\nAlbums:\n${list}`);
+    return;
+  }
+
+  const album = albums.find((a) => a.id === albumId);
+  if (!album) {
+    await sendMessage(env, chatId, `No album called "${albumId}". Send /deletephoto with no arguments to see valid ids.`);
+    return;
+  }
+
+  if (album.photos.length === 0) {
+    await sendMessage(env, chatId, `"${album.title}" has no photos.`);
+    return;
+  }
+
+  for (let i = 0; i < album.photos.length; i++) {
+    await sendPhotoByUrl(env, chatId, album.photos[i].src, `${i + 1}`);
+  }
+
+  const sent = await sendMessage(
+    env,
+    chatId,
+    `Reply with the number of the photo to delete (1-${album.photos.length}), or "cancel".`,
+    { reply_markup: { force_reply: true, selective: true } }
+  );
+  if (sent && sent.result) {
+    await env.PENDING_UPLOADS.put(`pendingDeletePhoto:${sent.result.message_id}`, albumId, { expirationTtl: UPLOAD_TTL_SECONDS });
+  }
+}
+
+async function handleDeletePhotoReply(albumId, pendingKey, message, env) {
+  const chatId = message.chat.id;
+  const text = (message.text || "").trim();
+  const senderName = (message.from && message.from.first_name) || "an admin";
+
+  if (/^cancel$/i.test(text)) {
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, "Delete cancelled.", { reply_to_message_id: message.message_id });
+    return;
+  }
+
+  const position = parseInt(text, 10);
+
+  try {
+    const title = await deletePhoto(env, albumId, position, senderName);
+    await env.PENDING_UPLOADS.delete(pendingKey);
+    await sendMessage(env, chatId, `Deleted photo ${position} from "${title}".`, { reply_to_message_id: message.message_id });
+  } catch (err) {
+    // Leave the pending state in place so they can just reply again with a corrected number.
+    await sendMessage(env, chatId, `${err.message} Reply again with a valid number, or "cancel".`, {
+      reply_to_message_id: message.message_id,
+    });
+  }
+}
+
 async function sendMessage(env, chatId, text, extra = {}) {
   const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
@@ -502,6 +652,38 @@ function githubHeaders(env) {
     "User-Agent": "mahmahs-photo-bot",
     Accept: "application/vnd.github+json",
   };
+}
+
+async function githubGetFileSha(env, path) {
+  const resp = await fetch(
+    `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/${path}?ref=${env.GITHUB_BRANCH}`,
+    { headers: githubHeaders(env) }
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) {
+    throw new Error(`GitHub file lookup failed: ${resp.status} ${await resp.text()}`);
+  }
+  const data = await resp.json();
+  return data.sha;
+}
+
+// No-op if the file is already gone, so a retried delete doesn't error out.
+async function githubDeletePhoto(env, path, senderName) {
+  const sha = await githubGetFileSha(env, path);
+  if (!sha) return;
+
+  const resp = await fetch(`https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/${path}`, {
+    method: "DELETE",
+    headers: githubHeaders(env),
+    body: JSON.stringify({
+      message: `Delete photo from Telegram (${senderName})`,
+      sha,
+      branch: env.GITHUB_BRANCH,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`GitHub photo delete failed: ${resp.status} ${await resp.text()}`);
+  }
 }
 
 async function githubUploadPhoto(env, path, bytes, senderName) {
@@ -610,6 +792,96 @@ async function reorderAlbum(env, albumId, order) {
         headers: githubHeaders(env),
         body: JSON.stringify({
           message: `Reorder album "${albumId}" from Telegram`,
+          content: bytesToBase64(content),
+          sha,
+          branch: env.GITHUB_BRANCH,
+        }),
+      }
+    );
+
+    if (putResp.ok) return album.title;
+
+    if (putResp.status === 409 && attempt < maxAttempts) continue;
+
+    throw new Error(`GitHub albums.json update failed: ${putResp.status} ${await putResp.text()}`);
+  }
+}
+
+// Deletes every photo file in the album, then removes the album entry from
+// albums.json. The photo files are deleted once upfront (deleting them isn't
+// affected by concurrent albums.json edits); only the albums.json write is
+// retried on a 409.
+async function deleteAlbum(env, albumId, senderName) {
+  const { albums } = await getAlbumsJson(env);
+  const album = albums.find((a) => a.id === albumId);
+  if (!album) {
+    throw new Error(`Album "${albumId}" no longer exists.`);
+  }
+
+  for (const photo of album.photos) {
+    await githubDeletePhoto(env, photo.src, senderName);
+  }
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { albums: freshAlbums, sha } = await getAlbumsJson(env);
+    const remaining = freshAlbums.filter((a) => a.id !== albumId);
+
+    const content = new TextEncoder().encode(JSON.stringify(remaining, null, 2) + "\n");
+    const putResp = await fetch(
+      `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/js/albums.json`,
+      {
+        method: "PUT",
+        headers: githubHeaders(env),
+        body: JSON.stringify({
+          message: `Delete album "${albumId}" via Telegram`,
+          content: bytesToBase64(content),
+          sha,
+          branch: env.GITHUB_BRANCH,
+        }),
+      }
+    );
+
+    if (putResp.ok) return album.title;
+
+    if (putResp.status === 409 && attempt < maxAttempts) continue;
+
+    throw new Error(`GitHub albums.json update failed: ${putResp.status} ${await putResp.text()}`);
+  }
+}
+
+// position is 1-indexed, matching what /deletephoto sends the user. Deletes
+// the photo file once upfront, then retries only the albums.json write on a
+// 409, matching deleteAlbum's approach.
+async function deletePhoto(env, albumId, position, senderName) {
+  const { albums } = await getAlbumsJson(env);
+  const album = albums.find((a) => a.id === albumId);
+  if (!album) {
+    throw new Error(`Album "${albumId}" no longer exists.`);
+  }
+  if (!Number.isInteger(position) || position < 1 || position > album.photos.length) {
+    throw new Error(`That's not a valid photo number — I need a number 1-${album.photos.length}.`);
+  }
+
+  const photo = album.photos[position - 1];
+  await githubDeletePhoto(env, photo.src, senderName);
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { albums: freshAlbums, sha } = await getAlbumsJson(env);
+    const freshAlbum = freshAlbums.find((a) => a.id === albumId);
+    if (freshAlbum) {
+      freshAlbum.photos = freshAlbum.photos.filter((p) => p.src !== photo.src);
+    }
+
+    const content = new TextEncoder().encode(JSON.stringify(freshAlbums, null, 2) + "\n");
+    const putResp = await fetch(
+      `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/contents/js/albums.json`,
+      {
+        method: "PUT",
+        headers: githubHeaders(env),
+        body: JSON.stringify({
+          message: `Delete photo from "${albumId}" via Telegram`,
           content: bytesToBase64(content),
           sha,
           branch: env.GITHUB_BRANCH,
