@@ -228,5 +228,15 @@
         "alt": "Shared by Ashley"
       }
     ]
+  },
+  {
+    "id": "cny",
+    "title": "CNY!",
+    "photos": [
+      {
+        "src": "photos/cny/bot-1783606361198-8032b102.jpg",
+        "alt": "Shared by isabelle"
+      }
+    ]
   }
 ]
