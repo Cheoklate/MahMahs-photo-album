@@ -119,5 +119,15 @@
         "alt": "Shared by Claudia"
       }
     ]
+  },
+  {
+    "id": "not-the-post-office",
+    "title": "Not the post office",
+    "photos": [
+      {
+        "src": "photos/not-the-post-office/bot-1783605903116-b24be522.jpg",
+        "alt": "Shared by Ashley"
+      }
+    ]
   }
 ]
