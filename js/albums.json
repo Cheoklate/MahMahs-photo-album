@@ -60,7 +60,12 @@
   {
     "id": "kids",
     "title": "Kids",
-    "photos": []
+    "photos": [
+      {
+        "src": "photos/kids/bot-1783606165564-e62ec7b9.jpg",
+        "alt": "Shared by Chris"
+      }
+    ]
   },
   {
     "id": "80th-at-bali",
