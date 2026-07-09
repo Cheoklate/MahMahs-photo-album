@@ -146,12 +146,35 @@ function openLightbox(album, index) {
   viewportWidth = lightboxViewport.getBoundingClientRect().width;
   updateSlides();
   setTrackPosition(0, false);
+  // Push a history entry so the phone's back button (and the browser's)
+  // closes the photo instead of leaving the app/navigating away.
+  history.pushState({ lightbox: true }, "");
 }
 
-function closeLightbox() {
+// Hides the lightbox without touching history - used when a popstate (the
+// back button) has already consumed the entry pushed by openLightbox.
+function hideLightbox() {
   lightbox.hidden = true;
   document.body.style.overflow = "";
 }
+
+// Closes the lightbox from an in-page action (close button, backdrop click,
+// Escape). Goes back through history so the entry from openLightbox is
+// consumed, keeping the back button in sync for the next photo.
+function closeLightbox() {
+  if (lightbox.hidden) return;
+  if (history.state && history.state.lightbox) {
+    history.back();
+  } else {
+    hideLightbox();
+  }
+}
+
+window.addEventListener("popstate", () => {
+  if (!lightbox.hidden && !(history.state && history.state.lightbox)) {
+    hideLightbox();
+  }
+});
 
 // direction: 1 to advance to the next photo, -1 for the previous photo, or
 // 0 to just spring back to the current one. Springs back (rather than
