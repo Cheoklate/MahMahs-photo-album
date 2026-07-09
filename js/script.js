@@ -95,6 +95,21 @@ function route() {
   }
 }
 
+// If the page loads with an album already in the hash (e.g. a link shared
+// from the Telegram bot), there's no albums-view entry underneath it in this
+// tab's history yet - the back button would leave the site entirely instead
+// of returning to the main page. Give it one to land on. History entries we
+// create are marked so a normal in-app visit doesn't get a duplicate.
+function ensureAlbumsHistoryBase() {
+  if (history.state && history.state.mahmahsApp) return;
+
+  const initialHash = location.hash;
+  history.replaceState({ mahmahsApp: true }, "", location.pathname + location.search);
+  if (initialHash) {
+    history.pushState({ mahmahsApp: true }, "", location.pathname + location.search + initialHash);
+  }
+}
+
 backButton.addEventListener("click", () => {
   location.hash = "";
 });
@@ -294,6 +309,7 @@ async function init() {
     albums = [];
   }
   renderAlbums();
+  ensureAlbumsHistoryBase();
   route();
 }
 
