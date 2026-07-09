@@ -14,6 +14,7 @@ const nextSlide = lightbox.querySelector('[data-slide="next"]');
 const closeBtn = lightbox.querySelector(".lightbox-close");
 const prevBtn = lightbox.querySelector(".lightbox-prev");
 const nextBtn = lightbox.querySelector(".lightbox-next");
+const downloadBtn = lightbox.querySelector(".lightbox-download");
 
 let albums = [];
 let currentAlbum = null;
@@ -131,6 +132,10 @@ function updateSlides() {
   setSlide(nextSlide, photoAt(1));
   prevBtn.disabled = currentIndex === 0;
   nextBtn.disabled = currentIndex === currentAlbum.photos.length - 1;
+
+  const photo = photoAt(0);
+  downloadBtn.href = photo ? photo.src : "";
+  downloadBtn.download = photo ? photo.src.split("/").pop() : "";
 }
 
 function setTrackPosition(offsetPx, withTransition) {

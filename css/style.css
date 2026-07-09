@@ -199,7 +199,8 @@ footer p {
 
 .lightbox-close,
 .lightbox-prev,
-.lightbox-next {
+.lightbox-next,
+.lightbox-download {
   all: unset;
   position: absolute;
   cursor: pointer;
@@ -217,6 +218,12 @@ footer p {
   top: 0.5rem;
   right: 0.5rem;
   font-size: 1.8rem;
+}
+
+.lightbox-download {
+  top: 0.5rem;
+  left: 0.5rem;
+  font-size: 1.5rem;
 }
 
 .lightbox-prev {
@@ -249,7 +256,8 @@ footer p {
 
   .lightbox-close:hover,
   .lightbox-prev:hover,
-  .lightbox-next:hover {
+  .lightbox-next:hover,
+  .lightbox-download:hover {
     color: var(--gold);
   }
 }
@@ -291,7 +299,8 @@ footer p {
 
   .lightbox-close,
   .lightbox-prev,
-  .lightbox-next {
+  .lightbox-next,
+  .lightbox-download {
     font-size: 2rem;
     padding: 0.5rem 1rem;
   }
@@ -300,5 +309,11 @@ footer p {
     top: 1rem;
     right: 1.5rem;
     font-size: 2.2rem;
+  }
+
+  .lightbox-download {
+    top: 1rem;
+    left: 1.5rem;
+    font-size: 1.8rem;
   }
 }
