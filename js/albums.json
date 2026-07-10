@@ -370,5 +370,15 @@
         "alt": "Shared by isabelle"
       }
     ]
+  },
+  {
+    "id": "love",
+    "title": "Love",
+    "photos": [
+      {
+        "src": "photos/love/bot-1783686773121-1d9bc198.jpg",
+        "alt": "Shared by Greg"
+      }
+    ]
   }
 ]
