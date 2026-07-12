@@ -13,5 +13,19 @@
       "binding": "PENDING_UPLOADS",
       "id": "ba816cfd40ad4cf1aec2b70c79582594"
     }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MEDIA_GROUP_BUFFER",
+        "class_name": "MediaGroupBuffer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MediaGroupBuffer"]
+    }
   ]
 }

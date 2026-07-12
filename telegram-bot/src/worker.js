@@ -3,14 +3,31 @@
 // Flow: a friend sends a photo -> the bot replies with inline buttons, one
 // per existing album plus "New Album" -> tapping an existing album uploads
 // straight away; tapping "New Album" asks for a name (force-reply) and then
-// creates it. Each pending photo is held in Workers KV (PENDING_UPLOADS) for
-// a few minutes under a short random id, since a Telegram bot can't re-fetch
-// an old message on demand — the id round-trips through the button's
-// callback_data (and, for the new-album case, through a second KV entry
-// keyed by the force-reply prompt's message id) so we know which photo a
-// later tap or reply belongs to.
+// creates it. Each pending upload (one photo, or several - see below) is
+// held in Workers KV (PENDING_UPLOADS) for a few minutes under a short
+// random id, since a Telegram bot can't re-fetch an old message on demand —
+// the id round-trips through the button's callback_data (and, for the
+// new-album case, through a second KV entry keyed by the force-reply
+// prompt's message id) so we know which photo(s) a later tap or reply
+// belongs to.
+//
+// Multi-select sends: Telegram delivers a gallery multi-select as separate
+// webhook calls, one per photo, sharing a media_group_id with no signal for
+// when the group is done. Workers KV has no atomic read-modify-write, so
+// buffering these in KV races when photos arrive close together (the common
+// case) — two requests can each see an empty buffer and both "win",
+// splitting one batch into two. handleGroupedPhoto instead hands each photo
+// to a MediaGroupBuffer Durable Object (one instance per media_group_id).
+// A DO instance's JS runs single-threaded, and synchronous code always runs
+// to completion before another concurrent call's code gets a turn, so the
+// "is this the first photo?" check-and-claim never races even when several
+// photos arrive at once. The first photo to reach the object waits for the
+// rest of the group to arrive and is told to send the single "which album?"
+// prompt; later ones are told not to.
 
 const UPLOAD_TTL_SECONDS = 600;
+const MEDIA_GROUP_SETTLE_TIMEOUT_MS = 3000;
+const MEDIA_GROUP_POLL_INTERVAL_MS = 350;
 
 export default {
   async fetch(request, env) {
@@ -112,12 +129,17 @@ async function handleMessage(message, env) {
   }
 
   if (message.text === "/start") {
-    await sendMessage(env, chatId, `Hi ${senderName}! Send me a photo and I'll ask which album to add it to.\n${env.SITE_URL}`);
+    await sendMessage(env, chatId, `Hi ${senderName}! Send me a photo (or select several at once) and I'll ask which album to add them to.\n${env.SITE_URL}`);
     return;
   }
 
   if (!message.photo || message.photo.length === 0) {
     await sendMessage(env, chatId, "Send me a photo (not a file/document) and I'll add it to an album!");
+    return;
+  }
+
+  if (message.media_group_id) {
+    await handleGroupedPhoto(message, env, senderName);
     return;
   }
 
@@ -134,7 +156,7 @@ async function handleMessage(message, env) {
   const largest = message.photo[message.photo.length - 1];
   await env.PENDING_UPLOADS.put(
     `upload:${uploadId}`,
-    JSON.stringify({ fileId: largest.file_id, caption: message.caption || null, senderName }),
+    JSON.stringify({ photos: [{ fileId: largest.file_id, caption: message.caption || null }], senderName }),
     { expirationTtl: UPLOAD_TTL_SECONDS }
   );
 
@@ -145,6 +167,92 @@ async function handleMessage(message, env) {
     reply_to_message_id: message.message_id,
     reply_markup: { inline_keyboard: buttons },
   });
+}
+
+// Hands one photo from a multi-select send to the MediaGroupBuffer Durable
+// Object for this media_group_id. Only the photo the object designates as
+// leader (see MediaGroupBuffer.fetch below) sends the album-choice prompt;
+// everyone else returns silently once the object has recorded their photo.
+async function handleGroupedPhoto(message, env, senderName) {
+  const chatId = message.chat.id;
+  const largest = message.photo[message.photo.length - 1];
+  const entry = { fileId: largest.file_id, caption: message.caption || null };
+
+  const id = env.MEDIA_GROUP_BUFFER.idFromName(message.media_group_id);
+  const stub = env.MEDIA_GROUP_BUFFER.get(id);
+  const resp = await stub.fetch("https://media-group-buffer/add", {
+    method: "POST",
+    body: JSON.stringify(entry),
+  });
+  const { photos, isLeader } = await resp.json();
+  if (!isLeader) return;
+
+  let albums;
+  try {
+    ({ albums } = await getAlbumsJson(env));
+  } catch (err) {
+    console.error("Failed to load albums for picker", err);
+    await sendMessage(env, chatId, "Sorry, I couldn't load the album list right now. Please try again in a moment.");
+    return;
+  }
+
+  const uploadId = crypto.randomUUID().slice(0, 8);
+  await env.PENDING_UPLOADS.put(`upload:${uploadId}`, JSON.stringify({ photos, senderName }), {
+    expirationTtl: UPLOAD_TTL_SECONDS,
+  });
+
+  const buttons = albums.map((album) => [{ text: album.title, callback_data: `album:${uploadId}:${album.id}` }]);
+  buttons.push([{ text: "➕ New Album", callback_data: `newalbum:${uploadId}` }]);
+
+  const countLabel = `${photos.length} photo${photos.length === 1 ? "" : "s"}`;
+  await sendMessage(env, chatId, `Got ${countLabel}. Which album should ${photos.length === 1 ? "it" : "they"} go in?`, {
+    reply_to_message_id: message.message_id,
+    reply_markup: { inline_keyboard: buttons },
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// One instance per media_group_id (short-lived - only alive for the few
+// seconds it takes a multi-select send to settle). The first call in claims
+// leadership and waits for the buffer to stop growing before responding to
+// everyone who called in, itself included; every other call just appends
+// and waits on that same settle promise.
+export class MediaGroupBuffer {
+  constructor() {
+    this.photos = [];
+    this.settlePromise = null;
+  }
+
+  async fetch(request) {
+    const entry = await request.json();
+    const isLeader = this.settlePromise === null;
+    this.photos.push(entry);
+
+    if (isLeader) {
+      this.settlePromise = this.waitToSettle();
+    }
+
+    const photos = await this.settlePromise;
+    return new Response(JSON.stringify({ photos, isLeader }));
+  }
+
+  // Polls its own buffer until it stops growing between two checks, or the
+  // timeout is reached - Telegram gives no explicit "end of group" signal.
+  async waitToSettle() {
+    let lastCount = -1;
+    const deadline = Date.now() + MEDIA_GROUP_SETTLE_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      await sleep(MEDIA_GROUP_POLL_INTERVAL_MS);
+      if (this.photos.length === lastCount) break;
+      lastCount = this.photos.length;
+    }
+
+    return this.photos;
+  }
 }
 
 async function handleCallbackQuery(callbackQuery, env) {
@@ -204,19 +312,17 @@ async function handleCallbackQuery(callbackQuery, env) {
       return;
     }
 
-    const fileBytes = await downloadTelegramFile(env, upload.fileId);
-    const photoPath = `photos/${albumId}/${photoFilename()}`;
-
-    await githubUploadPhoto(env, photoPath, fileBytes, upload.senderName);
-    await addPhotoToAlbum(env, albumId, null, photoPath, upload.caption || `Shared by ${upload.senderName}`);
+    const photoEntries = await uploadPhotosToGitHub(env, albumId, upload);
+    await addPhotosToAlbum(env, albumId, null, photoEntries);
     await env.PENDING_UPLOADS.delete(`upload:${uploadId}`);
 
     await answerCallbackQuery(env, callbackQuery.id, "Added!");
+    const countLabel = `${photoEntries.length} photo${photoEntries.length === 1 ? "" : "s"}`;
     await editMessageText(
       env,
       chatId,
       promptMessage.message_id,
-      `Thanks! Added to "${album.title}" 🎉\n${env.SITE_URL}#/album/${albumId}`
+      `Thanks! Added ${countLabel} to "${album.title}" 🎉\n${env.SITE_URL}#/album/${albumId}`
     );
   } catch (err) {
     console.error("Photo upload failed", err);
@@ -246,16 +352,14 @@ async function handleNewAlbumName(uploadId, pendingKey, message, env) {
   const albumId = slugify(title);
 
   try {
-    const fileBytes = await downloadTelegramFile(env, upload.fileId);
-    const photoPath = `photos/${albumId}/${photoFilename()}`;
-
-    await githubUploadPhoto(env, photoPath, fileBytes, upload.senderName);
-    const finalTitle = await addPhotoToAlbum(env, albumId, title, photoPath, upload.caption || `Shared by ${upload.senderName}`);
+    const photoEntries = await uploadPhotosToGitHub(env, albumId, upload);
+    const finalTitle = await addPhotosToAlbum(env, albumId, title, photoEntries);
 
     await env.PENDING_UPLOADS.delete(`upload:${uploadId}`);
     await env.PENDING_UPLOADS.delete(pendingKey);
 
-    await sendMessage(env, chatId, `Thanks! Created "${finalTitle}" and added your photo 🎉\n${env.SITE_URL}#/album/${albumId}`, {
+    const countLabel = `${photoEntries.length} photo${photoEntries.length === 1 ? "" : "s"}`;
+    await sendMessage(env, chatId, `Thanks! Created "${finalTitle}" and added ${countLabel} 🎉\n${env.SITE_URL}#/album/${albumId}`, {
       reply_to_message_id: message.message_id,
     });
   } catch (err) {
@@ -264,6 +368,19 @@ async function handleNewAlbumName(uploadId, pendingKey, message, env) {
       reply_to_message_id: message.message_id,
     });
   }
+}
+
+// Downloads and uploads every photo in a pending upload to GitHub, returning
+// the albums.json entries ({ src, alt }) for addPhotosToAlbum.
+async function uploadPhotosToGitHub(env, albumId, upload) {
+  const photoEntries = [];
+  for (const photo of upload.photos) {
+    const fileBytes = await downloadTelegramFile(env, photo.fileId);
+    const photoPath = `photos/${albumId}/${photoFilename()}`;
+    await githubUploadPhoto(env, photoPath, fileBytes, upload.senderName);
+    photoEntries.push({ src: photoPath, alt: photo.caption || `Shared by ${upload.senderName}` });
+  }
+  return photoEntries;
 }
 
 function slugify(title) {
@@ -331,7 +448,7 @@ const ADMIN_COMMANDS_HELP = `Admin commands:
 /deletephoto <album id> - delete a single photo from an album
 /commands - show this list
 
-Anyone allowed to submit photos (including you) can just send a photo to add it to an album.`;
+Anyone allowed to submit photos (including you) can just send a photo - or select several at once - to add them to an album.`;
 
 async function handleCommandsList(message, env) {
   await sendMessage(env, message.chat.id, ADMIN_COMMANDS_HELP);
@@ -715,10 +832,10 @@ async function getAlbumsJson(env) {
   return { albums, sha: data.sha };
 }
 
-// Appends a photo to the given album, creating it (using newAlbumTitle) if it
-// doesn't exist yet. Returns the album's title. Retries on a 409 (someone
-// else updated albums.json between our GET and PUT).
-async function addPhotoToAlbum(env, albumId, newAlbumTitle, photoPath, alt) {
+// Appends one or more photos to the given album, creating it (using
+// newAlbumTitle) if it doesn't exist yet. Returns the album's title. Retries
+// on a 409 (someone else updated albums.json between our GET and PUT).
+async function addPhotosToAlbum(env, albumId, newAlbumTitle, photoEntries) {
   const maxAttempts = 3;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -734,7 +851,7 @@ async function addPhotoToAlbum(env, albumId, newAlbumTitle, photoPath, alt) {
       album = { id: albumId, title: newAlbumTitle, photos: [] };
       albums.push(album);
     }
-    album.photos.push({ src: photoPath, alt });
+    album.photos.push(...photoEntries);
 
     const content = new TextEncoder().encode(JSON.stringify(albums, null, 2) + "\n");
     const putResp = await fetch(
@@ -743,7 +860,9 @@ async function addPhotoToAlbum(env, albumId, newAlbumTitle, photoPath, alt) {
         method: "PUT",
         headers: githubHeaders(env),
         body: JSON.stringify({
-          message: newAlbumTitle ? `Create album "${newAlbumTitle}" from Telegram` : "Add photo submitted via Telegram bot",
+          message: newAlbumTitle
+            ? `Create album "${newAlbumTitle}" from Telegram`
+            : `Add ${photoEntries.length} photo${photoEntries.length === 1 ? "" : "s"} submitted via Telegram bot`,
           content: bytesToBase64(content),
           sha,
           branch: env.GITHUB_BRANCH,
