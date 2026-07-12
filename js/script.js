@@ -147,6 +147,7 @@ function updateSlides() {
   setSlide(nextSlide, photoAt(1));
   prevBtn.disabled = currentIndex === 0;
   nextBtn.disabled = currentIndex === currentAlbum.photos.length - 1;
+  resetZoom();
 
   const photo = photoAt(0);
   downloadBtn.href = photo ? photo.src : "";
@@ -253,15 +254,161 @@ window.addEventListener("resize", () => {
   setTrackPosition(dragStartX === null ? 0 : dragOffset, false);
 });
 
+// Zoom & pan on the current photo — pinch (touch) or scroll wheel (mouse) to
+// zoom continuously, double-tap/double-click to jump to a fixed zoom level,
+// drag to pan while zoomed. All coexist with the swipe-between-photos drag
+// below: a single pointer drives swipe when not zoomed in, and pan once it
+// is; a second pointer touching down always starts a pinch.
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
+const DOUBLE_TAP_ZOOM = 2.5;
+const TAP_MAX_MOVEMENT = 10;
+const TAP_MAX_DELAY_MS = 300;
+
+let zoomScale = 1;
+let panX = 0;
+let panY = 0;
+
+function applyZoom(withTransition) {
+  currentSlide.style.transition = withTransition ? "transform 0.2s ease" : "none";
+  currentSlide.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+  lightboxViewport.style.cursor = zoomScale > 1 ? "grab" : "zoom-in";
+}
+
+function resetZoom() {
+  zoomScale = 1;
+  panX = 0;
+  panY = 0;
+  applyZoom(false);
+}
+
+// The img element's own box always fills its slide (33.3333% of the track),
+// but object-fit: contain letterboxes the actual photo pixels inside it —
+// this is the photo's real on-screen size, needed to clamp panning so it
+// can't be dragged past its own edges.
+function containedPhotoSize() {
+  const cw = currentSlide.clientWidth;
+  const ch = currentSlide.clientHeight;
+  const iw = currentSlide.naturalWidth;
+  const ih = currentSlide.naturalHeight;
+  if (!iw || !ih) return { width: cw, height: ch };
+  const fitScale = Math.min(cw / iw, ch / ih);
+  return { width: iw * fitScale, height: ih * fitScale };
+}
+
+function clampPan() {
+  const viewport = lightboxViewport.getBoundingClientRect();
+  const photo = containedPhotoSize();
+  const maxX = Math.max(0, (photo.width * zoomScale - viewport.width) / 2);
+  const maxY = Math.max(0, (photo.height * zoomScale - viewport.height) / 2);
+  panX = Math.min(maxX, Math.max(-maxX, panX));
+  panY = Math.min(maxY, Math.max(-maxY, panY));
+}
+
+// Zooms in to DOUBLE_TAP_ZOOM centered on (clientX, clientY), or back out to
+// 1x if already zoomed.
+function toggleZoom(clientX, clientY) {
+  if (zoomScale > 1) {
+    resetZoom();
+    return;
+  }
+  const rect = lightboxViewport.getBoundingClientRect();
+  const offsetX = clientX - rect.left - rect.width / 2;
+  const offsetY = clientY - rect.top - rect.height / 2;
+  zoomScale = DOUBLE_TAP_ZOOM;
+  panX = -offsetX * (zoomScale - 1);
+  panY = -offsetY * (zoomScale - 1);
+  clampPan();
+  applyZoom(true);
+}
+
+let lastTapTime = 0;
+let lastTapPos = null;
+
+// A "tap" is a pointer down/up with barely any movement in between (checked
+// by the caller). Two of those close together in time and position toggle
+// zoom — handled here rather than the native dblclick event so touch and
+// mouse behave the same way, and so it only fires after a real tap, never
+// after a swipe or pan.
+function maybeToggleZoomOnTap(x, y) {
+  const now = Date.now();
+  const isDoubleTap =
+    now - lastTapTime < TAP_MAX_DELAY_MS && lastTapPos && Math.hypot(x - lastTapPos.x, y - lastTapPos.y) < TAP_MAX_MOVEMENT;
+
+  if (isDoubleTap) {
+    lastTapTime = 0;
+    lastTapPos = null;
+    toggleZoom(x, y);
+  } else {
+    lastTapTime = now;
+    lastTapPos = { x, y };
+  }
+}
+
+function pointerDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function pointerMidpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+const pointerDownPos = new Map(); // pointerId -> {x, y} at pointerdown, for tap detection
+const activePointers = new Map(); // pointerId -> latest {x, y}
+let panPointerId = null;
+let panStart = null; // {x, y, panX, panY}
+let pinchStartDistance = 0;
+let pinchStartZoom = 1;
+let pinchAnchor = null; // photo-space point under the pinch midpoint, fixed for the gesture
+
+function beginPan(pointerId, x, y) {
+  panPointerId = pointerId;
+  panStart = { x, y, panX, panY };
+}
+
+function beginPinch() {
+  const [a, b] = [...activePointers.values()];
+  const rect = lightboxViewport.getBoundingClientRect();
+  const mid = pointerMidpoint(a, b);
+  const midX = mid.x - rect.left - rect.width / 2;
+  const midY = mid.y - rect.top - rect.height / 2;
+  pinchStartDistance = pointerDistance(a, b);
+  pinchStartZoom = zoomScale;
+  pinchAnchor = { x: (midX - panX) / zoomScale, y: (midY - panY) / zoomScale };
+}
+
 // Drag-to-swipe (touch, mouse, and pen alike via Pointer Events)
 const DRAG_THRESHOLD_RATIO = 0.2;
 
 lightboxViewport.addEventListener("pointerdown", (event) => {
   if (isAnimating) return;
-  activePointerId = event.pointerId;
-  dragStartX = event.clientX;
-  dragOffset = 0;
-  lightboxViewport.setPointerCapture(activePointerId);
+  pointerDownPos.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  try {
+    lightboxViewport.setPointerCapture(event.pointerId);
+  } catch {
+    // Rare (e.g. the pointer was already released) - the rest of this
+    // handler doesn't depend on capture succeeding, so just carry on.
+  }
+
+  if (activePointers.size === 2) {
+    // A second finger landed - abandon any in-progress swipe/pan and start a pinch.
+    dragStartX = null;
+    dragOffset = 0;
+    activePointerId = null;
+    panPointerId = null;
+    panStart = null;
+    setTrackPosition(0, true);
+    beginPinch();
+  } else if (activePointers.size === 1) {
+    if (zoomScale > 1) {
+      beginPan(event.pointerId, event.clientX, event.clientY);
+    } else {
+      activePointerId = event.pointerId;
+      dragStartX = event.clientX;
+      dragOffset = 0;
+    }
+  }
 });
 
 // At either end of the album, dragging toward the missing photo gets heavy
@@ -275,12 +422,70 @@ function withEdgeResistance(offset) {
 }
 
 lightboxViewport.addEventListener("pointermove", (event) => {
+  if (!activePointers.has(event.pointerId)) return;
+  activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+  if (activePointers.size === 2) {
+    if (!pinchAnchor) return; // shouldn't happen - beginPinch() runs whenever a 2nd pointer lands
+    const [a, b] = [...activePointers.values()];
+    const rect = lightboxViewport.getBoundingClientRect();
+    const mid = pointerMidpoint(a, b);
+    const midX = mid.x - rect.left - rect.width / 2;
+    const midY = mid.y - rect.top - rect.height / 2;
+    const distance = pointerDistance(a, b);
+    zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinchStartZoom * (distance / pinchStartDistance)));
+    panX = midX - pinchAnchor.x * zoomScale;
+    panY = midY - pinchAnchor.y * zoomScale;
+    clampPan();
+    applyZoom(false);
+    return;
+  }
+
+  if (panPointerId === event.pointerId) {
+    panX = panStart.panX + (event.clientX - panStart.x);
+    panY = panStart.panY + (event.clientY - panStart.y);
+    clampPan();
+    applyZoom(false);
+    return;
+  }
+
   if (dragStartX === null || event.pointerId !== activePointerId) return;
   dragOffset = event.clientX - dragStartX;
   setTrackPosition(withEdgeResistance(dragOffset), false);
 });
 
-function endDrag(event) {
+function endPointer(event) {
+  const downPos = pointerDownPos.get(event.pointerId);
+  pointerDownPos.delete(event.pointerId);
+  const wasTracked = activePointers.delete(event.pointerId);
+  const remaining = [...activePointers.entries()];
+
+  if (wasTracked && remaining.length === 0 && downPos) {
+    const moved = Math.hypot(event.clientX - downPos.x, event.clientY - downPos.y);
+    if (moved < TAP_MAX_MOVEMENT) maybeToggleZoomOnTap(event.clientX, event.clientY);
+  }
+
+  if (panPointerId === event.pointerId) {
+    panPointerId = null;
+    panStart = null;
+    if (zoomScale <= 1) resetZoom();
+    return;
+  }
+
+  if (remaining.length === 1) {
+    // Released one finger of a pinch - hand off to single-finger pan/swipe
+    // using whichever pointer is still down.
+    const [remainingId, pos] = remaining[0];
+    if (zoomScale > 1) {
+      beginPan(remainingId, pos.x, pos.y);
+    } else {
+      activePointerId = remainingId;
+      dragStartX = pos.x;
+      dragOffset = 0;
+    }
+    return;
+  }
+
   if (dragStartX === null || event.pointerId !== activePointerId) return;
 
   const threshold = viewportWidth * DRAG_THRESHOLD_RATIO;
@@ -297,8 +502,32 @@ function endDrag(event) {
   activePointerId = null;
 }
 
-lightboxViewport.addEventListener("pointerup", endDrag);
-lightboxViewport.addEventListener("pointercancel", endDrag);
+lightboxViewport.addEventListener("pointerup", endPointer);
+lightboxViewport.addEventListener("pointercancel", endPointer);
+
+// Scroll wheel is the desktop equivalent of pinch — zoom continuously,
+// anchored under the cursor.
+lightboxViewport.addEventListener(
+  "wheel",
+  (event) => {
+    if (lightbox.hidden) return;
+    event.preventDefault();
+
+    const rect = lightboxViewport.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left - rect.width / 2;
+    const offsetY = event.clientY - rect.top - rect.height / 2;
+    const anchorX = (offsetX - panX) / zoomScale;
+    const anchorY = (offsetY - panY) / zoomScale;
+
+    const factor = Math.exp(-event.deltaY * 0.01);
+    zoomScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoomScale * factor));
+    panX = offsetX - anchorX * zoomScale;
+    panY = offsetY - anchorY * zoomScale;
+    clampPan();
+    applyZoom(false);
+  },
+  { passive: false }
+);
 
 async function init() {
   try {
